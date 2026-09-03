@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}管理后台 · {{ site.siteName }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/admin.css">{% endblock %}
+
+{% block content %}
+<div class="admin-shell" data-admin-app>
+  <header class="admin-header">
+    <div>
+      <p class="eyebrow">CONTROL ROOM</p>
+      <h1>内容管理后台</h1>
+    </div>
+    <a class="button button-ghost" href="/">返回前台</a>
+  </header>
+
+  <div class="admin-gate" data-admin-gate>
+    <span class="gate-mark" aria-hidden="true">⌁</span>
+    <h2>正在验证管理员身份</h2>
+    <p>若未登录，将自动跳转到账户页面。</p>
+  </div>
+
+  <div class="admin-workspace is-hidden" data-admin-workspace>
+    <nav class="admin-tabs" aria-label="后台功能">
+      <button class="is-active" type="button" data-admin-view="dashboard">总览</button>
+      <button type="button" data-admin-view="notes">学习笔记</button>
+      <button type="button" data-admin-view="categories">栏目</button>
+      <button type="button" data-admin-view="announcements">公告</button>
+      <button type="button" data-admin-view="comments">留言</button>
+      <button type="button" data-admin-view="users">用户</button>
+      <button type="button" data-admin-view="transfer">数据迁移</button>
+      <button type="button" data-admin-view="settings">访问限制</button>
+    </nav>
+
+    <section class="admin-view is-active" data-view-panel="dashboard">
+      <div class="admin-section-title"><div><small>OVERVIEW</small><h2>站点总览</h2></div></div>
+      <div class="stat-grid" data-dashboard-stats></div>
+      <div class="admin-panel"><h3>最近更新</h3><div class="admin-list" data-recent-notes></div></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="notes">
+      <div class="admin-section-title"><div><small>CONTENT</small><h2>学习笔记</h2></div><button class="button button-primary" data-create-note>新建笔记</button></div>
+      <div class="admin-list" data-notes-list></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="categories">
+      <div class="admin-section-title"><div><small>NAVIGATION</small><h2>栏目管理</h2></div><button class="button button-primary" data-create-category>新建栏目</button></div>
+      <div class="admin-list" data-categories-list></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="announcements">
+      <div class="admin-section-title"><div><small>BROADCAST</small><h2>公告管理</h2></div><button class="button button-primary" data-create-announcement>新建公告</button></div>
+      <div class="admin-list" data-announcements-list></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="comments">
+      <div class="admin-section-title"><div><small>MODERATION</small><h2>留言审核</h2></div></div>
+      <div class="admin-list" data-comments-list></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="users">
+      <div class="admin-section-title"><div><small>ACCOUNTS</small><h2>用户管理</h2></div><button class="button button-primary" data-create-user>新建用户</button></div>
+      <div class="admin-list" data-users-list></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="transfer">
+      <div class="admin-section-title"><div><small>PORTABILITY</small><h2>数据迁移</h2></div></div>
+      <div class="transfer-grid">
+        <div class="admin-panel transfer-card"><span>01</span><h3>导出站点内容</h3><p>下载栏目、笔记和公告的 JSON v1 数据包，不包含账号与留言。</p><button class="button button-primary" data-export>导出 JSON</button></div>
+        <div class="admin-panel transfer-card"><span>02</span><h3>导入站点内容</h3><p>导入 JSON v1 数据包。已有相同标识的栏目和笔记会安全跳过。</p><label class="button button-ghost file-button">选择 JSON<input type="file" accept="application/json,.json" data-import-file></label></div>
+      </div>
+    </section>
+
+    <section class="admin-view" data-view-panel="settings">
+      <div class="admin-section-title"><div><small>POLICY</small><h2>站点与访问限制</h2></div></div>
+      <form class="admin-form settings-form" data-settings-form>
+        <div class="field-grid two"><label>站点名称<input name="siteName" required maxlength="50"></label><label>站点标语<input name="siteTagline" required maxlength="160"></label></div>
+        <label class="switch-field"><input name="registrationEnabled" type="checkbox"><span>允许访客注册新账号</span></label>
+        <div class="field-grid three"><label>每 IP 每分钟登录次数<input name="loginPerMinute" type="number" min="1" max="1000" required></label><label>每 IP 每小时注册次数<input name="registerPerHour" type="number" min="1" max="1000" required></label><label>每用户每分钟留言次数<input name="commentPerMinute" type="number" min="1" max="1000" required></label></div>
+        <button class="button button-primary" type="submit">保存设置</button>
+      </form>
+    </section>
+  </div>
+
+  <dialog class="admin-dialog" data-admin-dialog>
+    <form method="dialog" class="dialog-frame" data-dialog-form>
+      <header><div><small data-dialog-eyebrow>EDIT</small><h2 data-dialog-title>编辑</h2></div><button value="cancel" class="icon-button" aria-label="关闭">×</button></header>
+      <div class="dialog-body" data-dialog-body></div>
+      <footer><button value="cancel" class="button button-ghost">取消</button><button value="default" class="button button-primary" data-dialog-save>保存</button></footer>
+    </form>
+  </dialog>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/js/admin.js" defer></script>{% endblock %}
+

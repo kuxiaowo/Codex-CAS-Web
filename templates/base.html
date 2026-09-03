@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>{% block title %}{{ site.siteName }}{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <div class="ambient ambient-a" aria-hidden="true"></div>
+  <div class="ambient ambient-b" aria-hidden="true"></div>
+
+  <button class="mobile-menu" type="button" aria-label="打开导航" aria-expanded="false" data-menu-toggle>
+    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+
+  <aside class="sidebar" data-sidebar>
+    <a class="brand" href="/" aria-label="{{ site.siteName }} 首页">
+      <span class="brand-mark" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </span>
+      <span class="brand-copy">
+        <strong>{{ site.siteName }}</strong>
+        <small>PERSONAL INDEX</small>
+      </span>
+    </a>
+
+    <form class="side-search" action="/" method="get" role="search">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+      <input name="q" type="search" value="{{ query|default('') }}" placeholder="搜索笔记" aria-label="搜索笔记">
+      <kbd>/</kbd>
+    </form>
+
+    <nav class="side-nav" aria-label="内容栏目">
+      <p class="side-label">栏目</p>
+      <a class="side-link {{ 'is-active' if not activeCategory|default('') else '' }}" href="/">
+        <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h5v7H5zM14 4h5v4h-5zM14 12h5v8h-5zM5 15h5v5H5z"/></svg></span>
+        <span>全部内容</span>
+        <small>{{ totalNotes|default('') }}</small>
+      </a>
+      {% for category in categories %}
+        <a class="side-link {{ 'is-active' if activeCategory|default('') == category.slug else '' }}" href="/?category={{ category.slug }}">
+          <span class="category-dot" style="--category-accent: {{ category.accent }}"></span>
+          <span>{{ category.name }}</span>
+          <small>{{ category.noteCount }}</small>
+        </a>
+      {% endfor %}
+      <a class="side-link is-hidden" href="/admin" data-admin-link>
+        <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9l8-5 8 5v10M9 19v-6h6v6"/></svg></span>
+        <span>管理后台</span>
+        <small>ADMIN</small>
+      </a>
+    </nav>
+
+    <div class="sidebar-space"></div>
+    <div class="side-footer">
+      <div class="account-card" data-account-card>
+        <span class="account-avatar" data-account-avatar>访</span>
+        <span class="account-copy">
+          <strong data-account-name>访客</strong>
+          <small data-account-role>登录后参与留言</small>
+        </span>
+        <a href="/login" class="account-action" data-account-action aria-label="登录">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h6v16h-6"/></svg>
+        </a>
+      </div>
+    </div>
+  </aside>
+  <div class="sidebar-scrim" data-sidebar-scrim></div>
+
+  <main class="page" id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div class="toast-region" aria-live="polite" aria-atomic="true" data-toast-region></div>
+  <script src="/static/js/app.js" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
