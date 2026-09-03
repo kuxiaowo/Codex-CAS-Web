@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f7f8fc">
   <title>{% block title %}{{ site.siteName }}{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="/static/css/styles.css?v=gallery-v2.1">
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -26,13 +26,13 @@
       </span>
       <span class="brand-copy">
         <strong>{{ site.siteName }}</strong>
-        <small>PERSONAL INDEX</small>
+        <small>IMAGE ARCHIVE</small>
       </span>
     </a>
 
     <form class="side-search" action="/" method="get" role="search">
       <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-      <input name="q" type="search" value="{{ query|default('') }}" placeholder="搜索笔记" aria-label="搜索笔记">
+      <input name="q" type="search" value="{{ query|default('') }}" placeholder="搜索图集" aria-label="搜索图集">
       <kbd>/</kbd>
     </form>
 
@@ -41,13 +41,13 @@
       <a class="side-link {{ 'is-active' if not activeCategory|default('') else '' }}" href="/">
         <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h5v7H5zM14 4h5v4h-5zM14 12h5v8h-5zM5 15h5v5H5z"/></svg></span>
         <span>全部内容</span>
-        <small>{{ totalNotes|default('') }}</small>
+        <small>{{ totalGalleries|default('') }}</small>
       </a>
       {% for category in categories %}
         <a class="side-link {{ 'is-active' if activeCategory|default('') == category.slug else '' }}" href="/?category={{ category.slug }}">
           <span class="category-dot" style="--category-accent: {{ category.accent }}"></span>
           <span>{{ category.name }}</span>
-          <small>{{ category.noteCount }}</small>
+          <small>{{ category.galleryCount }}</small>
         </a>
       {% endfor %}
       <a class="side-link is-hidden" href="/admin" data-admin-link>
@@ -78,7 +78,7 @@
   </main>
 
   <div class="toast-region" aria-live="polite" aria-atomic="true" data-toast-region></div>
-  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/app.js?v=gallery-v2.1" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

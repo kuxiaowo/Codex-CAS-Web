@@ -1,78 +1,50 @@
 {% extends "base.html" %}
-{% block title %}{{ site.siteName }} · 学习笔记{% endblock %}
+{% block title %}{{ site.siteName }} · 图片图集{% endblock %}
 
 {% block content %}
 <div class="content-shell">
-  <header class="home-hero">
-    <div class="hero-index" aria-hidden="true">
-      <span>FIELD NOTES</span>
-      <i></i>
-      <b>{{ "%02d"|format(totalNotes) }}</b>
-    </div>
-    <div class="hero-copy">
-      <p class="eyebrow">一个持续生长的私人知识索引</p>
+  <header class="gallery-hero">
+    <p class="eyebrow">IMAGE ARCHIVE</p>
+    <div class="gallery-hero-line">
       <h1>{{ site.siteTagline }}</h1>
-      <p class="hero-note">用简短、可复用的条目，记录代码背后的判断与方法。</p>
+      <span><b>{{ totalGalleries }}</b> 个图集</span>
     </div>
+    <p>按栏目收纳图片资料，从封面进入后即可顺序阅读完整长图。</p>
   </header>
 
   {% if announcements %}
   <section class="announcement-strip" aria-label="站点公告">
     <span class="pulse-dot" aria-hidden="true"></span>
-    <div class="announcement-copy">
-      <small>更新播报</small>
-      <strong>{{ announcements[0].title }}</strong>
-      <span>{{ announcements[0].content }}</span>
-    </div>
+    <div class="announcement-copy"><small>更新播报</small><strong>{{ announcements[0].title }}</strong><span>{{ announcements[0].content }}</span></div>
   </section>
   {% endif %}
 
   <section class="section-heading">
-    <div>
-      {% if query %}<p class="eyebrow">搜索结果</p>{% endif %}
-      <h2>
-        {% if query %}关于“{{ query }}”{% elif activeCategory %}当前栏目{% else %}最近整理{% endif %}
-      </h2>
-    </div>
-    <span>{{ notes|length }} 条内容</span>
+    <div>{% if query %}<p class="eyebrow">搜索结果</p>{% endif %}<h2>{% if query %}关于“{{ query }}”{% elif activeCategory %}当前栏目{% else %}最近图集{% endif %}</h2></div>
+    <span>{{ galleries|length }} 个图集</span>
   </section>
 
-  {% if notes %}
-  <div class="note-grid">
-    {% for note in notes %}
-    <a class="note-card" href="/notes/{{ note.slug }}">
-      <span class="note-visual cover-{{ note.coverStyle }}" aria-hidden="true">
-        <span class="visual-number">{{ "%02d"|format(loop.index) }}</span>
-        <span class="visual-glyph">{{ '{ }' if loop.index % 3 == 1 else ('∿' if loop.index % 3 == 2 else '↗') }}</span>
-        <span class="visual-orbit"></span>
+  {% if galleries %}
+  <div class="gallery-grid">
+    {% for gallery in galleries %}
+    <a class="gallery-card" href="/galleries/{{ gallery.id }}">
+      <span class="gallery-cover">
+        {% if gallery.coverThumbSrc %}<img src="{{ gallery.coverThumbSrc }}" alt="" loading="{{ 'eager' if loop.index <= 3 else 'lazy' }}">{% else %}<span class="gallery-cover-empty" aria-hidden="true">暂无图片</span>{% endif %}
       </span>
-      <span class="note-body">
-        <span class="note-meta">
-          <span>{{ note.categoryName }}</span>
-          {% if note.isFeatured %}<em>精选</em>{% endif %}
-        </span>
-        <strong>{{ note.title }}</strong>
-        <span class="note-summary">{{ note.summary }}</span>
-        <span class="note-footer">
-          <span>{{ note.readingMinutes }} 分钟阅读</span>
-          <span>{{ note.views }} 次查看</span>
-        </span>
+      <span class="gallery-card-body">
+        <span class="gallery-card-meta"><span>{{ gallery.categoryName }}</span>{% if gallery.isFeatured %}<em>精选</em>{% endif %}</span>
+        <strong>{{ gallery.title }}</strong><small>{{ gallery.imageCount }} 张图片</small>
       </span>
     </a>
     {% endfor %}
   </div>
   {% else %}
   <div class="empty-state">
-    <span aria-hidden="true">⌁</span>
-    <h2>没有找到匹配的笔记</h2>
-    <p>试试更短的关键词，或者回到全部内容。</p>
-    <a class="button button-primary" href="/">查看全部内容</a>
+    <span aria-hidden="true">▧</span><h2>{% if query %}没有找到匹配的图集{% else %}还没有已发布的图集{% endif %}</h2>
+    <p>{% if query %}试试更短的标题关键词。{% else %}管理员可以先创建资源文件夹，再发布第一个图集。{% endif %}</p>
+    {% if query %}<a class="button button-primary" href="/">查看全部图集</a>{% endif %}
   </div>
   {% endif %}
-
-  <footer class="page-footer">
-    <span>CAS Notes · 把答案留在自己找得到的地方</span>
-    <a href="/admin">管理员入口</a>
-  </footer>
+  <footer class="page-footer"><span>{{ site.siteName }} · 图片资料归档</span><a href="/admin">管理员入口</a></footer>
 </div>
 {% endblock %}

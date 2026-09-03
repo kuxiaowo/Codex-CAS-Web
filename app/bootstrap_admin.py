@@ -45,7 +45,7 @@ def create_initial_admin(username: str, password: str, display_name: str = "管�
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="创建首个 CAS Notes 管理员")
+    parser = argparse.ArgumentParser(description="创建首个 CAS Gallery 管理员")
     parser.add_argument("--username", required=True, help="管理员用户名")
     parser.add_argument("--display-name", default="管理员", help="显示名称")
     args = parser.parse_args()
@@ -62,4 +62,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

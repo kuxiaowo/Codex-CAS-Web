@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ gallery.title }} · {{ site.siteName }}{% endblock %}
+
+{% block content %}
+<div class="gallery-reading-shell" data-gallery-page>
+  <a class="back-link" href="/?category={{ gallery.categorySlug }}">
+    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
+    返回{{ gallery.categoryName }}
+  </a>
+  <header class="gallery-reading-header">
+    <p class="eyebrow">{{ gallery.categoryName }}</p>
+    <h1>{{ gallery.title }}</h1>
+    <span>{{ gallery.imageCount }} 张图片</span>
+  </header>
+  {% if gallery.images %}
+  <div class="gallery-reading-list" aria-label="{{ gallery.title }} 图片">
+    {% for image in gallery.images %}
+    <figure class="gallery-page">
+      <button type="button" data-gallery-image="{{ loop.index0 }}" aria-label="放大第 {{ loop.index }} 张图片">
+        <img src="{{ image.thumbSrc }}" data-original-src="{{ image.src }}" alt="{{ gallery.title }}，第 {{ loop.index }} 张" loading="{{ 'eager' if loop.index == 1 else 'lazy' }}">
+      </button>
+      <figcaption>{{ "%02d"|format(loop.index) }} / {{ "%02d"|format(gallery.imageCount) }}</figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state compact-empty"><h2>这个图集暂时没有可显示的图片</h2><p>资源目录可能已被移动，或图片格式无法识别。</p></div>
+  {% endif %}
+  <section class="comments" data-comments data-gallery-id="{{ gallery.id }}">
+    <div class="section-heading compact-heading"><div><p class="eyebrow">讨论</p><h2>补充这份图集</h2></div></div>
+    <form class="comment-form" data-comment-form>
+      <label for="comment-content">留言内容</label>
+      <textarea id="comment-content" name="content" rows="4" maxlength="1000" placeholder="写下你的补充或疑问……" required></textarea>
+      <div class="form-actions"><small>需要登录后留言</small><button class="button button-primary" type="submit">发布留言</button></div>
+    </form>
+    <div class="comment-list" data-comment-list></div>
+  </section>
+</div>
+<dialog class="gallery-lightbox" data-gallery-lightbox aria-label="图片查看器">
+  <button class="lightbox-close" type="button" data-lightbox-close aria-label="关闭">×</button>
+  <button class="lightbox-nav previous" type="button" data-lightbox-prev aria-label="上一张">‹</button>
+  <img alt="">
+  <span data-lightbox-count></span>
+  <button class="lightbox-nav next" type="button" data-lightbox-next aria-label="下一张">›</button>
+</dialog>
+{% endblock %}

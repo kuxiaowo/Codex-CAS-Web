@@ -13,3 +13,5 @@ data/*.db-shm
 data/*.db-wal
 data/*.db-journal
 data/backups/
+resources/*
+!resources/.gitkeep

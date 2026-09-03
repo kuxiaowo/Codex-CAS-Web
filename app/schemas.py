@@ -38,14 +38,10 @@ class CategoryInput(ApiModel):
     is_active: bool = True
 
 
-class NoteInput(ApiModel):
+class GalleryInput(ApiModel):
     category_id: int
-    title: str = Field(min_length=1, max_length=120)
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,99}$")
-    summary: str = Field(default="", max_length=300)
-    content: str = Field(default="", max_length=100_000)
-    cover_style: str = Field(default="violet", pattern=r"^(violet|cyan|amber|rose|lime)$")
-    reading_minutes: int = Field(default=5, ge=1, le=240)
+    title: str = Field(min_length=1, max_length=60)
+    resource_dir: str = Field(min_length=1, max_length=500)
     status: str = Field(default="draft", pattern=r"^(draft|published|archived)$")
     is_featured: bool = False
 

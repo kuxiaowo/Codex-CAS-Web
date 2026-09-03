@@ -60,6 +60,21 @@
 .dialog-body textarea[name="content"] { min-height: 230px; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; }
 .dialog-body .inline-check { padding: 12px; grid-template-columns: auto 1fr; align-items: center; border: 1px solid var(--line); border-radius: 9px; }
 .dialog-body .inline-check input { width: 17px; min-height: 17px; accent-color: var(--violet); }
+.directory-field, .inline-input, .file-toolbar { display: flex; align-items: center; gap: 9px; }
+.directory-field input, .inline-input input { min-width: 0; flex: 1; }
+.file-manager-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, .7fr); gap: 16px; }
+.file-manager-grid .admin-panel { margin: 0; }
+.file-toolbar { margin-bottom: 16px; justify-content: space-between; }
+.file-toolbar strong { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font: 11px ui-monospace, monospace; }
+.file-list { display: grid; gap: 8px; }
+.file-actions { display: grid; align-content: start; gap: 15px; }
+.file-actions h3, .file-actions p { margin: 0; }
+.file-actions p { color: var(--muted); font: 11px ui-monospace, monospace; overflow-wrap: anywhere; }
+.file-actions label { display: grid; gap: 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.file-actions input[type="file"] { min-height: 44px; padding: 9px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.file-actions > small { color: var(--quiet); line-height: 1.6; }
+.file-picker-dialog { width: min(820px, calc(100% - 28px)); }
+.file-picker-dialog .dialog-frame { grid-template-rows: auto minmax(0, 1fr); }
 
 @media (max-width: 1000px) {
   .stat-grid { grid-template-columns: repeat(3, 1fr); }
@@ -68,7 +83,7 @@
   .admin-shell { width: calc(100% - 28px); padding-top: 76px; }
   .admin-header { align-items: start; flex-direction: column; justify-content: center; }
   .admin-section-title { align-items: stretch; flex-direction: column; }
-  .stat-grid, .transfer-grid, .field-grid.two, .field-grid.three { grid-template-columns: 1fr; }
+  .stat-grid, .transfer-grid, .field-grid.two, .field-grid.three, .file-manager-grid { grid-template-columns: 1fr; }
   .admin-row { grid-template-columns: 1fr; }
   .admin-row-actions { justify-content: start; }
 }

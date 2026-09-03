@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}管理后台 · {{ site.siteName }}{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/admin.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/admin.css?v=gallery-v2.1">{% endblock %}
 
 {% block content %}
 <div class="admin-shell" data-admin-app>
@@ -21,8 +21,9 @@
   <div class="admin-workspace is-hidden" data-admin-workspace>
     <nav class="admin-tabs" aria-label="后台功能">
       <button class="is-active" type="button" data-admin-view="dashboard">总览</button>
-      <button type="button" data-admin-view="notes">学习笔记</button>
+      <button type="button" data-admin-view="galleries">图集</button>
       <button type="button" data-admin-view="categories">栏目</button>
+      <button type="button" data-admin-view="files">资源文件</button>
       <button type="button" data-admin-view="announcements">公告</button>
       <button type="button" data-admin-view="comments">留言</button>
       <button type="button" data-admin-view="users">用户</button>
@@ -33,12 +34,31 @@
     <section class="admin-view is-active" data-view-panel="dashboard">
       <div class="admin-section-title"><div><small>OVERVIEW</small><h2>站点总览</h2></div></div>
       <div class="stat-grid" data-dashboard-stats></div>
-      <div class="admin-panel"><h3>最近更新</h3><div class="admin-list" data-recent-notes></div></div>
+      <div class="admin-panel"><h3>最近更新</h3><div class="admin-list" data-recent-galleries></div></div>
     </section>
 
-    <section class="admin-view" data-view-panel="notes">
-      <div class="admin-section-title"><div><small>CONTENT</small><h2>学习笔记</h2></div><button class="button button-primary" data-create-note>新建笔记</button></div>
-      <div class="admin-list" data-notes-list></div>
+    <section class="admin-view" data-view-panel="galleries">
+      <div class="admin-section-title"><div><small>COLLECTIONS</small><h2>图集管理</h2></div><button class="button button-primary" data-create-gallery>新建图集</button></div>
+      <div class="admin-list" data-galleries-list></div>
+    </section>
+
+    <section class="admin-view" data-view-panel="files">
+      <div class="admin-section-title"><div><small>RESOURCES</small><h2>资源文件</h2></div></div>
+      <div class="file-manager-grid">
+        <div class="admin-panel">
+          <div class="file-toolbar"><button class="button button-ghost" type="button" data-files-up>上一级</button><strong data-files-path>/resources/</strong></div>
+          <div class="file-list" data-files-list></div>
+        </div>
+        <aside class="admin-panel file-actions">
+          <h3>当前目录</h3><p data-upload-target>/resources/</p>
+          <label>新建文件夹<div class="inline-input"><input data-folder-name maxlength="255" placeholder="文件夹名称"><button class="button button-ghost" type="button" data-create-folder>新建</button></div></label>
+          <label>上传图片<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" data-upload-file></label>
+          <button class="button button-primary" type="button" data-upload-button>上传图片</button>
+          <label>上传整个文件夹<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" webkitdirectory directory multiple data-upload-folder></label>
+          <button class="button button-primary" type="button" data-upload-folder-button>上传文件夹</button>
+          <small>仅支持 JPG、PNG、WebP、GIF；单个文件不超过 50 MB。</small>
+        </aside>
+      </div>
     </section>
 
     <section class="admin-view" data-view-panel="categories">
@@ -64,8 +84,8 @@
     <section class="admin-view" data-view-panel="transfer">
       <div class="admin-section-title"><div><small>PORTABILITY</small><h2>数据迁移</h2></div></div>
       <div class="transfer-grid">
-        <div class="admin-panel transfer-card"><span>01</span><h3>导出站点内容</h3><p>下载栏目、笔记和公告的 JSON v1 数据包，不包含账号与留言。</p><button class="button button-primary" data-export>导出 JSON</button></div>
-        <div class="admin-panel transfer-card"><span>02</span><h3>导入站点内容</h3><p>导入 JSON v1 数据包。已有相同标识的栏目和笔记会安全跳过。</p><label class="button button-ghost file-button">选择 JSON<input type="file" accept="application/json,.json" data-import-file></label></div>
+        <div class="admin-panel transfer-card"><span>01</span><h3>导出站点内容</h3><p>下载栏目、图集目录和公告的 JSON v2 数据包，不包含图片、账号与留言。</p><button class="button button-primary" data-export>导出 JSON</button></div>
+        <div class="admin-panel transfer-card"><span>02</span><h3>导入站点内容</h3><p>导入 JSON v2 数据包；资源图片需单独放入 resources 目录。</p><label class="button button-ghost file-button">选择 JSON<input type="file" accept="application/json,.json" data-import-file></label></div>
       </div>
     </section>
 
@@ -87,7 +107,16 @@
       <footer><button value="cancel" class="button button-ghost">取消</button><button value="default" class="button button-primary" data-dialog-save>保存</button></footer>
     </form>
   </dialog>
+
+  <dialog class="admin-dialog file-picker-dialog" data-file-picker>
+    <div class="dialog-frame">
+      <header><div><small>RESOURCES</small><h2>选择资源文件夹</h2></div><button class="icon-button" type="button" data-picker-close aria-label="关闭">×</button></header>
+      <div class="dialog-body">
+        <div class="file-toolbar"><button class="button button-ghost" type="button" data-picker-up>上一级</button><strong data-picker-path>/resources/</strong><button class="button button-primary" type="button" data-picker-current>选择当前文件夹</button></div>
+        <div class="file-list" data-picker-list></div>
+      </div>
+    </div>
+  </dialog>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/admin.js" defer></script>{% endblock %}
-
+{% block scripts %}<script src="/static/js/admin.js?v=gallery-v2.1" defer></script>{% endblock %}

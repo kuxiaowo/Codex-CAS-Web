@@ -1,25 +1,20 @@
-# CAS Notes
+# CAS Gallery
 
-一个前后端一体化的学习笔记信息站。左侧固定导航包含品牌、搜索、栏目和账户信息；主要内容以卡片呈现。管理员后台支持用户、栏目、学习笔记、公告、留言审核、JSON 数据迁移及访问限制，不包含文件管理。
+一个以图片为主要内容的前后端一体化图集站。首页按栏目展示真实图片封面，详情页以单列方式阅读扫描图和长图；管理员可管理图集、浏览受控资源目录并上传图片或整个文件夹。
 
-## 技术栈
+## 技术栈与目录
 
-- FastAPI + Jinja2：页面与 JSON API
+- FastAPI + Jinja2：页面和 JSON API
+- SQLite：账号、栏目、图集目录、公告和留言
+- Pillow：按需生成 WebP 缩略图
 - 原生 HTML / CSS / JavaScript：无需 Node 构建
-- SQLite：单文件数据库，启动时自动创建结构与内置内容
-- Conda：Python 环境；依赖使用 pip 的 `requirements.txt` 维护
-
-## 目录
 
 ```text
-app/                 FastAPI、认证、SQLite 和输入模型
+app/                 FastAPI、认证、数据库、资源扫描与缩略图
 templates/           Jinja2 页面模板
-static/css/          前台与后台样式
-static/js/           前台与后台交互
-scripts/init_linux.sh
-tests/
-requirements.txt
-requirements-dev.txt
+static/              前端样式、脚本和站点静态资源
+resources/           用户图片资源（内容不纳入 Git）
+tests/               接口、迁移、上传和缩略图测试
 ```
 
 ## 本地运行
@@ -35,33 +30,38 @@ python -m app.bootstrap_admin --username admin --display-name "管理员"
 python -m app.main
 ```
 
-默认访问地址为 `http://127.0.0.1:3300/`，管理后台为 `/admin`，接口文档为 `/docs`。服务页面、静态资源和 API 均使用同一端口。
+默认地址为 `http://127.0.0.1:3300/`，管理后台为 `/admin`。测试或临时预览必须通过 `APP_PORT` 使用其他端口，例如 `3311`。
 
-测试时请通过环境变量覆盖 `APP_PORT`，不要占用默认端口。例如：
+## 图集与资源文件
+
+- 图集只保存简短标题、栏目、资源目录、发布状态和精选状态。
+- 图片放在项目根目录 `resources/` 的子文件夹中；每个子文件夹最多绑定一个图集。
+- 支持 JPG/JPEG、PNG、WebP、GIF。图库只扫描所选目录当前层，并按文件名自然排序。
+- 首页封面自动使用第一张图片；详情页展示全部缩略图，点击后灯箱加载原图。
+- 缩略图按需写入源图旁的 `.thumbs/`，源图更新后自动重建。
+- 后台可浏览目录、新建文件夹、上传单图或上传整个文件夹；不提供删除与重命名，删除图集也不会删除实体图片。
+- 发布图集前，目录必须存在并包含至少一张可识别图片；草稿允许使用空目录。
+
+上传大小和缩略图参数可在 `.env` 调整：
+
+```dotenv
+UPLOAD_MAX_MB=50
+THUMBNAIL_MAX_WIDTH=1600
+THUMBNAIL_MAX_HEIGHT=4000
+THUMBNAIL_WEBP_QUALITY=82
+THUMBNAIL_WEBP_METHOD=6
+```
+
+## 数据迁移与导入导出
+
+数据库结构版本为 v2。旧 v1 数据库首次启动时会删除旧笔记及其留言，保留账号、栏目、公告、站点设置和访问限制，再建立图集表与新的留言关联。
+
+JSON 导入导出格式为 v2，只包含资源相对路径，不包含图片文件。迁移站点时需要另外复制 `resources/`。v1 笔记数据包不会被兼容导入。
+
+## 测试
 
 ```powershell
-$env:APP_PORT = "3311"
-python -m app.main
+python -m pytest -q
 ```
 
-## Linux 初始化
-
-脚本不需要 root，会创建或复用 `.env` 中 `CONDA_ENV_NAME` 指定的环境，并安装一个 systemd 用户服务：
-
-```bash
-cp .env.example .env
-bash scripts/init_linux.sh --admin admin --display-name "管理员"
-```
-
-脚本会补充新配置、生成独立认证密钥、安装 requirements、初始化 SQLite，并校验及启动用户服务。它不会创建默认密码，也不会暗中执行 `sudo`。
-
-## 数据与安全约定
-
-- 首次建库会创建“学习笔记”栏目和四条演示笔记，不创建任何账号。
-- 首个管理员必须通过交互式命令创建；已有启用中的管理员后，引导命令会拒绝再次执行。
-- Markdown 正文渲染后会经过 HTML 白名单清理。
-- 登录、注册和留言使用数据库持久化限流，管理员可在后台调整额度。
-- JSON 导入只补充不存在的栏目和笔记；同标识内容会跳过，不覆盖已有数据。
-
-视觉方向参考了 [Linear Docs](https://linear.app/docs) 的侧栏层级、快捷搜索和卡片节奏，并针对中文学习内容重新设计了渐变色、卡片封面与阅读页。
-
+测试使用临时数据库和临时资源目录，不启动默认端口。

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# CAS Notes Linux initializer.
+# CAS Gallery Linux initializer.
 # Creates/updates the Conda environment and installs one systemd --user service.
 
 set -Eeuo pipefail
@@ -96,7 +96,7 @@ if [[ -z "$(read_env AUTH_SECRET_KEY)" ]]; then
   log "已生成独立的 AUTH_SECRET_KEY"
 fi
 
-log "初始化数据库结构与内置学习笔记"
+log "初始化数据库结构与资源目录"
 (
   cd -- "$PROJECT_DIR"
   "$CONDA_EXE" run -n "$CONDA_ENV_NAME" python -c \
@@ -107,7 +107,7 @@ mkdir -p -- "$SYSTEMD_USER_DIR"
 UNIT_NAME="${SERVICE_NAME}.service"
 cat >"$SYSTEMD_USER_DIR/$UNIT_NAME" <<EOF
 [Unit]
-Description=CAS Notes integrated web service
+Description=CAS Gallery integrated web service
 After=network.target
 
 [Service]
@@ -145,4 +145,3 @@ if command -v loginctl >/dev/null 2>&1; then
     log "提示：如需注销后继续运行，请由管理员执行：loginctl enable-linger $USER"
   fi
 fi
-

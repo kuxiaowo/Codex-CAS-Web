@@ -53,6 +53,11 @@ class Settings:
         "DATABASE_CONNECT_TIMEOUT_SECONDS", 5, minimum=0
     )
     database_busy_timeout_ms: int = _env_int("DATABASE_BUSY_TIMEOUT_MS", 5000)
+    upload_max_bytes: int = _env_int("UPLOAD_MAX_MB", 50, minimum=1) * 1024 * 1024
+    thumbnail_max_width: int = _env_int("THUMBNAIL_MAX_WIDTH", 1600, minimum=1)
+    thumbnail_max_height: int = _env_int("THUMBNAIL_MAX_HEIGHT", 4000, minimum=1)
+    thumbnail_webp_quality: int = _env_int("THUMBNAIL_WEBP_QUALITY", 82, minimum=1)
+    thumbnail_webp_method: int = _env_int("THUMBNAIL_WEBP_METHOD", 6)
     auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "").strip()
     auth_token_expire_minutes: int = _env_int(
         "AUTH_TOKEN_EXPIRE_MINUTES", 240, minimum=1
@@ -72,7 +77,10 @@ def validate_runtime_settings() -> None:
         raise RuntimeError("APP_HOST 不能为空")
     if not 1 <= settings.app_port <= 65535:
         raise RuntimeError("APP_PORT 必须在 1-65535 之间")
+    if not 1 <= settings.thumbnail_webp_quality <= 100:
+        raise RuntimeError("THUMBNAIL_WEBP_QUALITY 必须在 1-100 之间")
+    if not 0 <= settings.thumbnail_webp_method <= 6:
+        raise RuntimeError("THUMBNAIL_WEBP_METHOD 必须在 0-6 之间")
     secret = settings.auth_secret_key.encode("utf-8")
     if len(secret) < 32:
         raise RuntimeError("AUTH_SECRET_KEY 未配置或长度不足 32 字节")
-

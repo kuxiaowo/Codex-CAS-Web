@@ -131,13 +131,13 @@
   async function initComments() {
     const root = document.querySelector('[data-comments]');
     if (!root) return;
-    const noteId = root.dataset.noteId;
+    const galleryId = root.dataset.galleryId;
     const list = root.querySelector('[data-comment-list]');
     const form = root.querySelector('[data-comment-form]');
 
     async function load() {
       try {
-        const { data } = await api(`/api/notes/${noteId}/comments`);
+        const { data } = await api(`/api/galleries/${galleryId}/comments`);
         list.replaceChildren();
         if (!data.length) {
           const empty = document.createElement('div');
@@ -176,7 +176,7 @@
       const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
       try {
-        await api(`/api/notes/${noteId}/comments`, { method: 'POST', body: JSON.stringify({ content }) });
+        await api(`/api/galleries/${galleryId}/comments`, { method: 'POST', body: JSON.stringify({ content }) });
         form.reset();
         toast('留言已发布');
         await load();
@@ -189,9 +189,53 @@
     await load();
   }
 
+  function initGalleryViewer() {
+    const page = document.querySelector('[data-gallery-page]');
+    const dialog = document.querySelector('[data-gallery-lightbox]');
+    if (!page || !dialog) return;
+    const buttons = [...page.querySelectorAll('[data-gallery-image]')];
+    const image = dialog.querySelector('img');
+    const count = dialog.querySelector('[data-lightbox-count]');
+    let activeIndex = 0;
+    let touchStartX = null;
+
+    const show = (index) => {
+      activeIndex = (index + buttons.length) % buttons.length;
+      const source = buttons[activeIndex].querySelector('img');
+      image.src = source.dataset.originalSrc;
+      image.alt = source.alt;
+      count.textContent = `${activeIndex + 1} / ${buttons.length}`;
+    };
+    buttons.forEach((button, index) => button.addEventListener('click', () => {
+      show(index);
+      dialog.showModal();
+    }));
+    dialog.querySelector('[data-lightbox-close]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('[data-lightbox-prev]').addEventListener('click', () => show(activeIndex - 1));
+    dialog.querySelector('[data-lightbox-next]').addEventListener('click', () => show(activeIndex + 1));
+    dialog.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowLeft') show(activeIndex - 1);
+      if (event.key === 'ArrowRight') show(activeIndex + 1);
+    });
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.addEventListener('close', () => image.removeAttribute('src'));
+    dialog.addEventListener('touchstart', (event) => {
+      touchStartX = event.changedTouches[0]?.clientX ?? null;
+    }, { passive: true });
+    dialog.addEventListener('touchend', (event) => {
+      if (touchStartX === null) return;
+      const delta = (event.changedTouches[0]?.clientX ?? touchStartX) - touchStartX;
+      if (Math.abs(delta) > 50) show(activeIndex + (delta < 0 ? 1 : -1));
+      touchStartX = null;
+    }, { passive: true });
+  }
+
   window.CASNotes = Object.freeze({ api, formatDate, refreshAccount, toast, token, TOKEN_KEY });
   initNavigation();
   initAuth();
   refreshAccount();
   initComments();
+  initGalleryViewer();
 })();

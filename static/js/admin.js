@@ -7,11 +7,14 @@
   const { api, formatDate, toast, token } = window.CASNotes;
   const state = {
     categories: [],
-    notes: [],
+    galleries: [],
     announcements: [],
     comments: [],
     users: [],
     settings: null,
+    filePath: '',
+    pickerPath: '',
+    pickerTarget: null,
   };
   let dialogSave = null;
 
@@ -33,6 +36,10 @@
     element.textContent = label;
     element.addEventListener('click', handler);
     return element;
+  }
+
+  function listen(selector, eventName, handler) {
+    root.querySelector(selector)?.addEventListener(eventName, handler);
   }
 
   function row(titleValue, metaValues, actions = []) {
@@ -92,6 +99,16 @@
     return label;
   }
 
+  function directoryField(value = '') {
+    const wrap = document.createElement('div');
+    wrap.className = 'directory-field';
+    const control = input('resourceDir', value, { required: true, maxLength: 500 });
+    control.readOnly = true;
+    control.placeholder = '从 resources 中选择文件夹';
+    wrap.append(control, button('浏览', 'button-ghost', () => openDirectoryPicker(control)));
+    return field('资源文件夹', wrap);
+  }
+
   function input(name, value = '', options = {}) {
     const element = document.createElement(options.multiline ? 'textarea' : 'input');
     element.name = name;
@@ -137,8 +154,8 @@
     const { data } = await api('/api/admin/dashboard');
     const stats = root.querySelector('[data-dashboard-stats]');
     const items = [
-      ['全部笔记', data.counts.notes],
-      ['已发布', data.counts.publishedNotes],
+      ['全部图集', data.counts.galleries],
+      ['已发布', data.counts.publishedGalleries],
       ['注册用户', data.counts.users],
       ['留言', data.counts.comments],
       ['累计查看', data.counts.views],
@@ -149,11 +166,11 @@
       card.append(text('small', label), text('strong', String(value)));
       return card;
     }));
-    const recent = root.querySelector('[data-recent-notes]');
-    recent.replaceChildren(...data.recentNotes.map((note) => row(
-      note.title,
-      [note.status, note.categoryName, `更新于 ${formatDate(note.updatedAt)}`],
-      [button('编辑', 'button-ghost', () => editNote(note))],
+    const recent = root.querySelector('[data-recent-galleries]');
+    recent.replaceChildren(...data.recentGalleries.map((gallery) => row(
+      gallery.title,
+      [gallery.status, gallery.categoryName, `${gallery.imageCount} 张图片`, `更新于 ${formatDate(gallery.updatedAt)}`],
+      [button('编辑', 'button-ghost', () => editGallery(gallery))],
     )));
   }
 
@@ -164,7 +181,7 @@
     if (!data.length) return empty(container, '还没有栏目。');
     container.replaceChildren(...data.map((category) => row(
       category.name,
-      [category.isActive ? '启用' : '停用', category.slug, `${category.noteCount} 条笔记`, `排序 ${category.sortOrder}`],
+      [category.isActive ? '启用' : '停用', category.slug, `${category.galleryCount} 个图集`, `排序 ${category.sortOrder}`],
       [
         button('编辑', 'button-ghost', () => editCategory(category)),
         button('删除', 'button-danger', () => removeWithConfirmation(
@@ -183,7 +200,7 @@
       body(container) {
         container.append(
           field('栏目名称', input('name', category?.name, { required: true, maxLength: 50 })),
-          field('URL 标识', input('slug', category?.slug, { required: true, maxLength: 50, placeholder: 'study-notes' })),
+          field('URL 标识', input('slug', category?.slug, { required: true, maxLength: 50, placeholder: 'photo-archive' })),
           field('栏目说明', input('description', category?.description, { multiline: true, maxLength: 200 })),
           field('强调色', input('accent', category?.accent || '#8b7cff', { type: 'color' })),
           field('排序权重', input('sortOrder', category?.sortOrder ?? 10, { type: 'number', min: 0, max: 10000, required: true })),
@@ -203,72 +220,63 @@
         await api(category ? `/api/admin/categories/${category.id}` : '/api/admin/categories', {
           method: category ? 'PATCH' : 'POST', body: JSON.stringify(payload),
         });
-        await Promise.all([loadCategories(), loadNotes()]);
+        await Promise.all([loadCategories(), loadGalleries()]);
       },
     });
   }
 
-  async function loadNotes() {
-    const { data } = await api('/api/admin/notes');
-    state.notes = data;
-    const container = root.querySelector('[data-notes-list]');
-    if (!data.length) return empty(container, '还没有学习笔记。');
-    container.replaceChildren(...data.map((note) => row(
-      note.title,
-      [note.status, note.categoryName, `${note.readingMinutes} 分钟`, `${note.views} 次查看`, formatDate(note.updatedAt)],
+  async function loadGalleries() {
+    const { data } = await api('/api/admin/galleries');
+    state.galleries = data;
+    const container = root.querySelector('[data-galleries-list]');
+    if (!data.length) return empty(container, '还没有图集。先在资源文件中准备图片目录。');
+    container.replaceChildren(...data.map((gallery) => row(
+      gallery.title,
+      [gallery.status, gallery.categoryName, gallery.resourceDir, `${gallery.imageCount} 张图片`, `${gallery.views} 次查看`, formatDate(gallery.updatedAt)],
       [
-        button('预览', 'button-ghost', () => window.open(`/notes/${encodeURIComponent(note.slug)}`, '_blank', 'noopener')),
-        button('编辑', 'button-ghost', () => editNote(note)),
+        button('预览', 'button-ghost', () => window.open(`/galleries/${gallery.id}`, '_blank', 'noopener')),
+        button('编辑', 'button-ghost', () => editGallery(gallery)),
         button('删除', 'button-danger', () => removeWithConfirmation(
-          `确定删除笔记“${note.title}”及其留言吗？`,
-          `/api/admin/notes/${note.id}`,
-          async () => { await Promise.all([loadNotes(), loadDashboard()]); },
+          `确定删除图集“${gallery.title}”及其留言吗？资源文件不会删除。`,
+          `/api/admin/galleries/${gallery.id}`,
+          async () => { await Promise.all([loadGalleries(), loadDashboard()]); },
         )),
       ],
     )));
   }
 
-  function editNote(note = null) {
+  function editGallery(gallery = null) {
     if (!state.categories.length) {
       toast('请先创建栏目', true);
       activateView('categories');
       return;
     }
     openDialog({
-      title: note ? '编辑学习笔记' : '新建学习笔记',
-      eyebrow: 'CONTENT',
+      title: gallery ? '编辑图集' : '新建图集',
+      eyebrow: 'COLLECTION',
       body(container) {
         container.append(
-          field('标题', input('title', note?.title, { required: true, maxLength: 120 })),
-          field('URL 标识', input('slug', note?.slug, { required: true, maxLength: 100, placeholder: 'python-context-manager' })),
-          field('栏目', select('categoryId', state.categories.map((item) => ({ value: item.id, label: item.name })), note?.categoryId || state.categories[0].id)),
-          field('摘要', input('summary', note?.summary, { multiline: true, maxLength: 300 })),
-          field('Markdown 正文', input('content', note?.content, { multiline: true, maxLength: 100000 })),
-          field('卡片主题', select('coverStyle', [
-            { value: 'violet', label: '暮紫' }, { value: 'cyan', label: '湖蓝' },
-            { value: 'amber', label: '琥珀' }, { value: 'rose', label: '莓红' },
-            { value: 'lime', label: '青柠' },
-          ], note?.coverStyle || 'violet')),
-          field('阅读分钟', input('readingMinutes', note?.readingMinutes ?? 5, { type: 'number', min: 1, max: 240, required: true })),
+          field('简短标题', input('title', gallery?.title, { required: true, maxLength: 60 })),
+          field('栏目', select('categoryId', state.categories.map((item) => ({ value: item.id, label: item.name })), gallery?.categoryId || state.categories[0].id)),
+          directoryField(gallery?.resourceDir),
           field('状态', select('status', [
             { value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' },
             { value: 'archived', label: '已归档' },
-          ], note?.status || 'draft')),
-          checkbox('isFeatured', '作为精选内容优先展示', note?.isFeatured ?? false),
+          ], gallery?.status || 'draft')),
+          checkbox('isFeatured', '作为精选图集优先展示', gallery?.isFeatured ?? false),
         );
       },
       async onSave(container) {
         const values = formData(container);
         const payload = {
-          category_id: Number(values.categoryId), title: values.title, slug: values.slug,
-          summary: values.summary, content: values.content, cover_style: values.coverStyle,
-          reading_minutes: Number(values.readingMinutes), status: values.status,
+          category_id: Number(values.categoryId), title: values.title,
+          resource_dir: values.resourceDir, status: values.status,
           is_featured: container.querySelector('[name="isFeatured"]').checked,
         };
-        await api(note ? `/api/admin/notes/${note.id}` : '/api/admin/notes', {
-          method: note ? 'PATCH' : 'POST', body: JSON.stringify(payload),
+        await api(gallery ? `/api/admin/galleries/${gallery.id}` : '/api/admin/galleries', {
+          method: gallery ? 'PATCH' : 'POST', body: JSON.stringify(payload),
         });
-        await Promise.all([loadNotes(), loadCategories(), loadDashboard()]);
+        await Promise.all([loadGalleries(), loadCategories(), loadDashboard()]);
       },
     });
   }
@@ -327,7 +335,7 @@
     if (!data.length) return empty(container, '还没有留言。');
     container.replaceChildren(...data.map((comment) => row(
       comment.content,
-      [comment.status, comment.author, comment.noteTitle, formatDate(comment.createdAt)],
+      [comment.status, comment.author, comment.galleryTitle, formatDate(comment.createdAt)],
       [
         button(comment.status === 'visible' ? '隐藏' : '恢复', 'button-ghost', async () => {
           try {
@@ -408,17 +416,128 @@
     });
   }
 
+  function parentPath(path) {
+    const parts = String(path || '').split('/').filter(Boolean);
+    parts.pop();
+    return parts.join('/');
+  }
+
+  function renderFileList(container, items, { picker = false } = {}) {
+    if (!items.length) return empty(container, '当前目录为空。');
+    container.replaceChildren(...items.map((item) => {
+      const actions = [];
+      if (item.type === 'folder') {
+        actions.push(button('打开', 'button-ghost', () => {
+          if (picker) loadPickerFiles(item.path);
+          else loadFiles(item.path);
+        }));
+        if (picker) actions.push(button('选择', 'button-primary', () => chooseDirectory(item.path)));
+      }
+      const size = item.type === 'file' ? `${Math.ceil(item.size / 1024)} KB` : '文件夹';
+      return row(item.name, [size, item.url], actions);
+    }));
+  }
+
+  async function loadFiles(path = state.filePath) {
+    const { data, path: current, url } = await api(`/api/admin/files/tree?path=${encodeURIComponent(path)}`);
+    state.filePath = current;
+    root.querySelector('[data-files-path]').textContent = url;
+    root.querySelector('[data-upload-target]').textContent = url;
+    renderFileList(root.querySelector('[data-files-list]'), data);
+  }
+
+  async function createFolder() {
+    const control = root.querySelector('[data-folder-name]');
+    const name = control.value.trim();
+    if (!name) return toast('请输入文件夹名称', true);
+    await api('/api/admin/files/folders', {
+      method: 'POST', body: JSON.stringify({ parentPath: state.filePath, name }),
+    });
+    control.value = '';
+    await loadFiles();
+    toast('文件夹已创建');
+  }
+
+  async function uploadFile() {
+    const control = root.querySelector('[data-upload-file]');
+    const file = control.files?.[0];
+    if (!file) return toast('请选择图片', true);
+    const body = new FormData();
+    body.append('file', file, file.name);
+    body.append('targetPath', state.filePath);
+    await api('/api/admin/uploads', { method: 'POST', body });
+    control.value = '';
+    await loadFiles();
+    toast('图片已上传');
+  }
+
+  async function uploadFolder() {
+    const control = root.querySelector('[data-upload-folder]');
+    const files = [...(control.files || [])];
+    if (!files.length) return toast('请选择包含图片的文件夹', true);
+    const paths = files.map((file) => file.webkitRelativePath || '');
+    if (paths.some((path) => !path.includes('/'))) {
+      return toast('当前浏览器未提供文件夹相对路径，请使用 Chrome 或 Edge', true);
+    }
+    const body = new FormData();
+    files.forEach((file, index) => {
+      body.append('files', file, file.name);
+      body.append('relativePaths', paths[index]);
+    });
+    body.append('targetPath', state.filePath);
+    const result = await api('/api/admin/files/folder-upload', { method: 'POST', body });
+    control.value = '';
+    await loadFiles();
+    toast(`已上传 ${result.fileCount} 张图片`);
+  }
+
+  async function openDirectoryPicker(target) {
+    state.pickerTarget = target;
+    state.pickerPath = target.value || '';
+    const dialog = root.querySelector('[data-file-picker]');
+    dialog.showModal();
+    try {
+      await loadPickerFiles(state.pickerPath);
+    } catch (error) {
+      state.pickerPath = '';
+      await loadPickerFiles('');
+      toast(error.message, true);
+    }
+  }
+
+  async function loadPickerFiles(path = state.pickerPath) {
+    const result = await api(`/api/admin/files/tree?path=${encodeURIComponent(path)}`);
+    state.pickerPath = result.path;
+    root.querySelector('[data-picker-path]').textContent = result.url;
+    root.querySelector('[data-picker-current]').disabled = !result.path;
+    renderFileList(root.querySelector('[data-picker-list]'), result.data, { picker: true });
+  }
+
+  function chooseDirectory(path = state.pickerPath) {
+    if (!path) return;
+    if (state.pickerTarget) state.pickerTarget.value = path;
+    state.pickerTarget = null;
+    root.querySelector('[data-file-picker]').close();
+  }
+
   function initEvents() {
     root.querySelectorAll('[data-admin-view]').forEach((tab) => {
       tab.addEventListener('click', () => activateView(tab.dataset.adminView));
     });
-    root.querySelector('[data-create-note]').addEventListener('click', () => editNote());
-    root.querySelector('[data-create-category]').addEventListener('click', () => editCategory());
-    root.querySelector('[data-create-announcement]').addEventListener('click', () => editAnnouncement());
-    root.querySelector('[data-create-user]').addEventListener('click', () => editUser());
+    listen('[data-create-gallery]', 'click', () => editGallery());
+    listen('[data-create-category]', 'click', () => editCategory());
+    listen('[data-create-announcement]', 'click', () => editAnnouncement());
+    listen('[data-create-user]', 'click', () => editUser());
+    listen('[data-files-up]', 'click', () => loadFiles(parentPath(state.filePath)).catch((error) => toast(error.message, true)));
+    listen('[data-create-folder]', 'click', () => createFolder().catch((error) => toast(error.message, true)));
+    listen('[data-upload-button]', 'click', () => uploadFile().catch((error) => toast(error.message, true)));
+    listen('[data-upload-folder-button]', 'click', () => uploadFolder().catch((error) => toast(error.message, true)));
+    listen('[data-picker-up]', 'click', () => loadPickerFiles(parentPath(state.pickerPath)).catch((error) => toast(error.message, true)));
+    listen('[data-picker-current]', 'click', () => chooseDirectory());
+    listen('[data-picker-close]', 'click', () => root.querySelector('[data-file-picker]')?.close());
 
     const dialogForm = root.querySelector('[data-dialog-form]');
-    dialogForm.addEventListener('submit', async (event) => {
+    dialogForm?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const save = root.querySelector('[data-dialog-save]');
       save.disabled = true;
@@ -434,7 +553,7 @@
     });
 
     const settingsForm = root.querySelector('[data-settings-form]');
-    settingsForm.addEventListener('submit', async (event) => {
+    settingsForm?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const values = Object.fromEntries(new FormData(settingsForm));
       try {
@@ -451,28 +570,28 @@
       } catch (error) { toast(error.message, true); }
     });
 
-    root.querySelector('[data-export]').addEventListener('click', async () => {
+    listen('[data-export]', 'click', async () => {
       try {
         const response = await fetch('/api/admin/export', { headers: { Authorization: `Bearer ${token()}` } });
         if (!response.ok) throw new Error((await response.json()).detail || '导出失败');
         const url = URL.createObjectURL(await response.blob());
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'cas-notes-export.json';
+        link.download = 'cas-gallery-export.json';
         link.click();
         URL.revokeObjectURL(url);
         toast('数据已导出');
       } catch (error) { toast(error.message, true); }
     });
 
-    root.querySelector('[data-import-file]').addEventListener('change', async (event) => {
+    listen('[data-import-file]', 'change', async (event) => {
       const file = event.target.files?.[0];
       if (!file) return;
       try {
         const payload = JSON.parse(await file.text());
         const { data } = await api('/api/admin/import', { method: 'POST', body: JSON.stringify(payload) });
-        toast(`已导入：${data.categories} 个栏目、${data.notes} 条笔记、${data.announcements} 条公告`);
-        await Promise.all([loadCategories(), loadNotes(), loadAnnouncements(), loadDashboard()]);
+        toast(`已导入：${data.categories} 个栏目、${data.galleries} 个图集、${data.announcements} 条公告`);
+        await Promise.all([loadCategories(), loadGalleries(), loadAnnouncements(), loadDashboard()]);
       } catch (error) {
         toast(error instanceof SyntaxError ? 'JSON 文件格式不正确' : error.message, true);
       } finally {
@@ -491,8 +610,8 @@
       if (user.role !== 'admin') throw new Error('当前账号不是管理员');
       initEvents();
       await Promise.all([
-        loadDashboard(), loadCategories(), loadNotes(), loadAnnouncements(),
-        loadComments(), loadUsers(), loadSettings(),
+        loadDashboard(), loadCategories(), loadGalleries(), loadAnnouncements(),
+        loadComments(), loadUsers(), loadSettings(), loadFiles(),
       ]);
       root.querySelector('[data-admin-gate]').classList.add('is-hidden');
       root.querySelector('[data-admin-workspace]').classList.remove('is-hidden');
@@ -505,4 +624,3 @@
 
   initialize();
 })();
-
