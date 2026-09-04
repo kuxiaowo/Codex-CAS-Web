@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 import shutil
 import sqlite3
@@ -21,6 +23,7 @@ from app.database import connect, get_setting, initialize_database, transaction,
 from app.gallery_assets import (
     IMAGE_EXTENSIONS,
     RESOURCE_DIR,
+    ensure_thumbnail,
     ensure_resource_root,
     folder_url,
     format_file_item,
@@ -29,6 +32,8 @@ from app.gallery_assets import (
     normalize_folder_upload_path,
     resolve_resource_path,
     scan_gallery,
+    sync_all_thumbnails,
+    sync_gallery_thumbnails,
     validate_entry_name,
     validate_gallery_directory,
 )
@@ -46,6 +51,23 @@ from app.schemas import (
 
 STATIC_DIR = PROJECT_ROOT / "static"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
+logger = logging.getLogger(__name__)
+
+
+async def _thumbnail_sync_loop() -> None:
+    interval_seconds = settings.thumbnail_sync_minutes * 60
+    while interval_seconds > 0:
+        await asyncio.sleep(interval_seconds)
+        try:
+            result = await asyncio.to_thread(sync_all_thumbnails)
+            logger.info(
+                "缩略图定时同步完成：扫描 %s，生成 %s，已有 %s，清理 %s，失败 %s",
+                result.scanned, result.generated, result.current, result.removed, result.failed,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("缩略图定时同步失败")
 
 
 @asynccontextmanager
@@ -53,7 +75,22 @@ async def lifespan(_: FastAPI):
     validate_runtime_settings()
     ensure_resource_root()
     initialize_database()
-    yield
+    result = await asyncio.to_thread(sync_all_thumbnails)
+    logger.info(
+        "缩略图启动同步完成：扫描 %s，生成 %s，已有 %s，清理 %s，失败 %s",
+        result.scanned, result.generated, result.current, result.removed, result.failed,
+    )
+    sync_task = (
+        asyncio.create_task(_thumbnail_sync_loop(), name="thumbnail-sync")
+        if settings.thumbnail_sync_minutes > 0 else None
+    )
+    try:
+        yield
+    finally:
+        if sync_task is not None:
+            sync_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sync_task
 
 
 app = FastAPI(
@@ -83,7 +120,7 @@ def _site_context(connection: sqlite3.Connection) -> dict:
         "siteTagline": get_setting(
             connection,
             "site_tagline",
-            "把图片资料，整理成随时能找到的图集。",
+            "一个简单的笔记集合站。",
         ),
     }
 
@@ -617,6 +654,9 @@ def _write_gallery(connection: sqlite3.Connection, payload: GalleryInput, galler
         payload.resource_dir,
         require_images=payload.status == "published",
     )
+    thumbnail_result = sync_gallery_thumbnails(resource_dir)
+    if thumbnail_result.failed:
+        raise HTTPException(status_code=500, detail="图集缩略图生成失败，请检查资源文件")
     now = utc_now()
     values = (
         payload.category_id, title, resource_dir,
@@ -889,6 +929,9 @@ async def admin_upload_file(
     if not is_valid_image(target):
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail="文件内容不是可识别的图片")
+    if await asyncio.to_thread(ensure_thumbnail, target) is None:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="图片缩略图生成失败")
     return {"data": format_file_item(target)}
 
 
@@ -941,6 +984,11 @@ async def admin_upload_folder(
                 raise HTTPException(
                     status_code=422,
                     detail=f"文件内容不是可识别的图片：{relative.as_posix()}",
+                )
+            if await asyncio.to_thread(ensure_thumbnail, target) is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"图片缩略图生成失败：{relative.as_posix()}",
                 )
             total_size += size
     except FileExistsError as exc:

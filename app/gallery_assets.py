@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -15,6 +17,7 @@ from app.config import PROJECT_ROOT, settings
 RESOURCE_DIR = PROJECT_ROOT / "resources"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 THUMB_DIR_NAME = ".thumbs"
+_THUMBNAIL_LOCK = threading.RLock()
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:[/\\]")
 WINDOWS_FILENAME_RESERVED_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 WINDOWS_RESERVED_NAMES = {
@@ -22,6 +25,15 @@ WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+
+
+@dataclass(frozen=True)
+class ThumbnailSyncResult:
+    scanned: int = 0
+    generated: int = 0
+    current: int = 0
+    removed: int = 0
+    failed: int = 0
 
 
 def ensure_resource_root() -> None:
@@ -130,6 +142,25 @@ def folder_url(relative: str) -> str:
     return f"/resources/{encoded}/" if encoded else "/resources/"
 
 
+def thumbnail_path(source: Path) -> Path:
+    return source.parent / THUMB_DIR_NAME / f"{source.name}.webp"
+
+
+def _thumbnail_is_current(source: Path, thumb_path: Path) -> bool:
+    try:
+        if not thumb_path.is_file() or thumb_path.stat().st_mtime_ns < source.stat().st_mtime_ns:
+            return False
+        from PIL import Image
+        with Image.open(thumb_path) as image:
+            return (
+                image.format == "WEBP"
+                and image.width <= settings.thumbnail_max_width
+                and image.height <= settings.thumbnail_max_height
+            )
+    except (ImportError, OSError, ValueError):
+        return False
+
+
 def ensure_thumbnail(source: Path) -> str | None:
     """按源图修改时间缓存一个保持比例的 WebP 预览图。"""
 
@@ -138,29 +169,112 @@ def ensure_thumbnail(source: Path) -> str | None:
     except ImportError:
         return None
 
-    thumb_dir = source.parent / THUMB_DIR_NAME
-    thumb_path = thumb_dir / f"{source.name}.webp"
-    try:
-        if not thumb_path.is_file() or thumb_path.stat().st_mtime_ns < source.stat().st_mtime_ns:
-            thumb_dir.mkdir(exist_ok=True)
-            with Image.open(source) as opened:
-                image = ImageOps.exif_transpose(opened)
-                if getattr(image, "is_animated", False):
-                    image.seek(0)
-                image.thumbnail((settings.thumbnail_max_width, settings.thumbnail_max_height))
-                if image.mode not in {"RGB", "RGBA"}:
-                    image = image.convert("RGB")
-                image.save(
-                    thumb_path,
-                    "WEBP",
-                    quality=settings.thumbnail_webp_quality,
-                    method=settings.thumbnail_webp_method,
-                )
-            source_stat = source.stat()
-            os.utime(thumb_path, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
-        return resource_url(thumb_path)
-    except (OSError, UnidentifiedImageError, ValueError):
-        return None
+    thumb_path = thumbnail_path(source)
+    temporary = thumb_path.with_name(
+        f".{thumb_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    with _THUMBNAIL_LOCK:
+        try:
+            if not _thumbnail_is_current(source, thumb_path):
+                thumb_path.parent.mkdir(exist_ok=True)
+                with Image.open(source) as opened:
+                    image = ImageOps.exif_transpose(opened)
+                    if getattr(image, "is_animated", False):
+                        image.seek(0)
+                    image.thumbnail((settings.thumbnail_max_width, settings.thumbnail_max_height))
+                    if image.mode not in {"RGB", "RGBA"}:
+                        image = image.convert("RGB")
+                    image.save(
+                        temporary,
+                        "WEBP",
+                        quality=settings.thumbnail_webp_quality,
+                        method=settings.thumbnail_webp_method,
+                    )
+                os.replace(temporary, thumb_path)
+            return resource_url(thumb_path)
+        except (OSError, UnidentifiedImageError, ValueError):
+            return None
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _sync_sources(sources: list[Path], thumb_dirs: list[Path]) -> ThumbnailSyncResult:
+    expected = {thumbnail_path(source).resolve() for source in sources}
+    generated = 0
+    current = 0
+    failed = 0
+    for source in sources:
+        thumb = thumbnail_path(source)
+        if _thumbnail_is_current(source, thumb):
+            current += 1
+        elif ensure_thumbnail(source) is None:
+            failed += 1
+        else:
+            generated += 1
+
+    removed = 0
+    for thumb_dir in thumb_dirs:
+        if not thumb_dir.is_dir() or thumb_dir.is_symlink():
+            continue
+        for item in thumb_dir.iterdir():
+            try:
+                if item.is_file() and item.suffix.casefold() == ".webp" and item.resolve() not in expected:
+                    item.unlink()
+                    removed += 1
+            except OSError:
+                failed += 1
+    return ThumbnailSyncResult(
+        scanned=len(sources), generated=generated, current=current,
+        removed=removed, failed=failed,
+    )
+
+
+def sync_gallery_thumbnails(resource_dir: str) -> ThumbnailSyncResult:
+    """立即同步一个图集当前层的全部缩略图。"""
+
+    directory, _ = resolve_resource_path(resource_dir, allow_root=False, must_exist=True)
+    if not directory.is_dir():
+        return ThumbnailSyncResult(failed=1)
+    return _sync_sources(image_files(directory), [directory / THUMB_DIR_NAME])
+
+
+def sync_all_thumbnails() -> ThumbnailSyncResult:
+    """递归同步 resources 中的缩略图，并清理已删除源图对应的缓存。"""
+
+    ensure_resource_root()
+    root = RESOURCE_DIR.resolve()
+    sources: list[Path] = []
+    thumb_dirs: list[Path] = []
+    for current, directory_names, file_names in os.walk(root, followlinks=False):
+        directory = Path(current)
+        safe_directories: list[str] = []
+        for name in directory_names:
+            candidate = directory / name
+            if name.casefold() == THUMB_DIR_NAME.casefold():
+                thumb_dirs.append(candidate)
+                continue
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if not candidate.is_symlink() and (resolved == root or root in resolved.parents):
+                safe_directories.append(name)
+        directory_names[:] = safe_directories
+        for name in file_names:
+            source = directory / name
+            if source.suffix.casefold() not in IMAGE_EXTENSIONS or source.is_symlink():
+                continue
+            try:
+                resolved = source.resolve()
+            except OSError:
+                continue
+            if root in resolved.parents and is_valid_image(source):
+                sources.append(source)
+    sources.sort(key=lambda path: natural_sort_key(path))
+    return _sync_sources(sources, thumb_dirs)
 
 
 def scan_gallery(resource_dir: str, *, cover_only: bool = False) -> list[dict]:
@@ -179,7 +293,7 @@ def scan_gallery(resource_dir: str, *, cover_only: bool = False) -> list[dict]:
                 "index": index,
                 "name": source.name,
                 "src": original,
-                "thumbSrc": ensure_thumbnail(source) or original,
+                "thumbSrc": ensure_thumbnail(source),
             }
         )
     return images

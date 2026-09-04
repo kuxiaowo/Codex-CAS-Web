@@ -17,7 +17,7 @@
     {% for image in gallery.images %}
     <figure class="gallery-page">
       <button type="button" data-gallery-image="{{ loop.index0 }}" aria-label="放大第 {{ loop.index }} 张图片">
-        <img src="{{ image.thumbSrc }}" data-original-src="{{ image.src }}" alt="{{ gallery.title }}，第 {{ loop.index }} 张" loading="{{ 'eager' if loop.index == 1 else 'lazy' }}">
+        <img src="{{ image.thumbSrc }}" data-original-src="{{ image.src }}" alt="{{ gallery.title }}，第 {{ loop.index }} 张" loading="{{ 'eager' if loop.index == 1 else 'lazy' }}" decoding="async">
       </button>
       <figcaption>{{ "%02d"|format(loop.index) }} / {{ "%02d"|format(gallery.imageCount) }}</figcaption>
     </figure>
@@ -39,7 +39,7 @@
 <dialog class="gallery-lightbox" data-gallery-lightbox aria-label="图片查看器">
   <button class="lightbox-close" type="button" data-lightbox-close aria-label="关闭">×</button>
   <button class="lightbox-nav previous" type="button" data-lightbox-prev aria-label="上一张">‹</button>
-  <img alt="">
+  <img alt="" decoding="async">
   <span data-lightbox-count></span>
   <button class="lightbox-nav next" type="button" data-lightbox-next aria-label="下一张">›</button>
 </dialog>

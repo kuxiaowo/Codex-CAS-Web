@@ -54,10 +54,11 @@ class Settings:
     )
     database_busy_timeout_ms: int = _env_int("DATABASE_BUSY_TIMEOUT_MS", 5000)
     upload_max_bytes: int = _env_int("UPLOAD_MAX_MB", 50, minimum=1) * 1024 * 1024
-    thumbnail_max_width: int = _env_int("THUMBNAIL_MAX_WIDTH", 1600, minimum=1)
-    thumbnail_max_height: int = _env_int("THUMBNAIL_MAX_HEIGHT", 4000, minimum=1)
+    thumbnail_max_width: int = _env_int("THUMBNAIL_MAX_WIDTH", 640, minimum=1)
+    thumbnail_max_height: int = _env_int("THUMBNAIL_MAX_HEIGHT", 640, minimum=1)
     thumbnail_webp_quality: int = _env_int("THUMBNAIL_WEBP_QUALITY", 82, minimum=1)
     thumbnail_webp_method: int = _env_int("THUMBNAIL_WEBP_METHOD", 6)
+    thumbnail_sync_minutes: int = _env_int("THUMBNAIL_SYNC_MINUTES", 5)
     auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "").strip()
     auth_token_expire_minutes: int = _env_int(
         "AUTH_TOKEN_EXPIRE_MINUTES", 240, minimum=1

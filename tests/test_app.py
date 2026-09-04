@@ -4,6 +4,7 @@ import importlib
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -84,6 +85,8 @@ class AppTest(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 201, response.text)
+        self.assertTrue((directory / ".thumbs" / "2.jpg.webp").is_file())
+        self.assertTrue((directory / ".thumbs" / "10.jpg.webp").is_file())
         return response.json()["data"]
 
     def test_home_empty_and_health(self) -> None:
@@ -112,6 +115,12 @@ class AppTest(unittest.TestCase):
         detail = self.client.get(f"/galleries/{gallery['id']}")
         self.assertEqual(detail.status_code, 200)
         self.assertLess(detail.text.index("2.jpg"), detail.text.index("10.jpg"))
+        image_sources = re.findall(
+            r'<img src="([^"]+)" data-original-src="([^"]+)"', detail.text
+        )
+        self.assertEqual(len(image_sources), 2)
+        self.assertTrue(all("/.thumbs/" in preview for preview, _ in image_sources))
+        self.assertTrue(all("/.thumbs/" not in original for _, original in image_sources))
         admin = self.client.get("/api/admin/galleries", headers=self.admin_headers()).json()["data"]
         item = next(value for value in admin if value["id"] == gallery["id"])
         self.assertEqual(item["imageCount"], 2)
@@ -161,6 +170,7 @@ class AppTest(unittest.TestCase):
             files={"file": ("001.jpg", image_bytes(), "image/jpeg")},
         )
         self.assertEqual(uploaded.status_code, 201, uploaded.text)
+        self.assertTrue((self.resource_dir / "资料" / ".thumbs" / "001.jpg.webp").is_file())
         tree = self.client.get("/api/admin/files/tree", headers=headers, params={"path": "资料"})
         self.assertEqual(tree.json()["data"][0]["name"], "001.jpg")
 
@@ -174,6 +184,8 @@ class AppTest(unittest.TestCase):
         )
         self.assertEqual(batch.status_code, 201, batch.text)
         self.assertTrue((self.resource_dir / "批量" / "子目录" / "2.png").is_file())
+        self.assertTrue((self.resource_dir / "批量" / ".thumbs" / "1.png.webp").is_file())
+        self.assertTrue((self.resource_dir / "批量" / "子目录" / ".thumbs" / "2.png.webp").is_file())
 
     def test_file_security_and_invalid_upload(self) -> None:
         headers = self.admin_headers()

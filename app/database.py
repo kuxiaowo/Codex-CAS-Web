@@ -122,7 +122,7 @@ PRAGMA user_version = 2;
 
 DEFAULT_SETTINGS = {
     "site_name": "CAS Gallery",
-    "site_tagline": "把图片资料，整理成随时能找到的图集。",
+    "site_tagline": "一个简单的笔记集合站。",
     "registration_enabled": "true",
     "login_per_minute": "10",
     "register_per_hour": "5",
