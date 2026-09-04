@@ -100,7 +100,9 @@ class AppTest(unittest.TestCase):
             "data-picker-current", "data-settings-form", "data-export",
         ):
             self.assertIn(control, response.text)
-        self.assertIn("/static/js/admin.js?v=gallery-v2.1", response.text)
+        self.assertIn("/static/js/admin.js?v=gallery-v2.2", response.text)
+        self.assertGreaterEqual(response.text.count('type="button" value="cancel"'), 2)
+        self.assertGreaterEqual(response.text.count("data-dialog-close"), 2)
 
     def test_gallery_crud_search_detail_and_natural_sort(self) -> None:
         gallery = self.create_gallery("scan-pages")

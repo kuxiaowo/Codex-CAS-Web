@@ -535,6 +535,13 @@
     listen('[data-picker-up]', 'click', () => loadPickerFiles(parentPath(state.pickerPath)).catch((error) => toast(error.message, true)));
     listen('[data-picker-current]', 'click', () => chooseDirectory());
     listen('[data-picker-close]', 'click', () => root.querySelector('[data-file-picker]')?.close());
+    root.querySelectorAll('[data-dialog-close]').forEach((control) => {
+      control.addEventListener('click', (event) => {
+        event.preventDefault();
+        dialogSave = null;
+        root.querySelector('[data-admin-dialog]')?.close();
+      });
+    });
 
     const dialogForm = root.querySelector('[data-dialog-form]');
     dialogForm?.addEventListener('submit', async (event) => {

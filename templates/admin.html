@@ -102,9 +102,9 @@
 
   <dialog class="admin-dialog" data-admin-dialog>
     <form method="dialog" class="dialog-frame" data-dialog-form>
-      <header><div><small data-dialog-eyebrow>EDIT</small><h2 data-dialog-title>编辑</h2></div><button value="cancel" class="icon-button" aria-label="关闭">×</button></header>
+      <header><div><small data-dialog-eyebrow>EDIT</small><h2 data-dialog-title>编辑</h2></div><button type="button" value="cancel" class="icon-button" data-dialog-close aria-label="关闭">×</button></header>
       <div class="dialog-body" data-dialog-body></div>
-      <footer><button value="cancel" class="button button-ghost">取消</button><button value="default" class="button button-primary" data-dialog-save>保存</button></footer>
+      <footer><button type="button" value="cancel" class="button button-ghost" data-dialog-close>取消</button><button type="submit" value="default" class="button button-primary" data-dialog-save>保存</button></footer>
     </form>
   </dialog>
 
@@ -119,4 +119,4 @@
   </dialog>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/admin.js?v=gallery-v2.1" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/js/admin.js?v=gallery-v2.2" defer></script>{% endblock %}
