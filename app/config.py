@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -45,7 +47,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    app_host: str = os.getenv("APP_HOST", "0.0.0.0").strip()
+    app_host: str = os.getenv("APP_HOST", "127.0.0.1").strip()
     app_port: int = _env_int("APP_PORT", 3300, minimum=1)
     app_reload: bool = _env_bool("APP_RELOAD", False)
     database_path: str = os.getenv("DATABASE_PATH", "data/cas_notes.db").strip()
@@ -59,9 +61,19 @@ class Settings:
     thumbnail_webp_quality: int = _env_int("THUMBNAIL_WEBP_QUALITY", 82, minimum=1)
     thumbnail_webp_method: int = _env_int("THUMBNAIL_WEBP_METHOD", 6)
     thumbnail_sync_minutes: int = _env_int("THUMBNAIL_SYNC_MINUTES", 5)
-    auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "").strip()
-    auth_token_expire_minutes: int = _env_int(
-        "AUTH_TOKEN_EXPIRE_MINUTES", 240, minimum=1
+    oidc_issuer: str = os.getenv("OIDC_ISSUER", "https://auth.nethub.wiki").strip().rstrip("/")
+    oidc_client_id: str = os.getenv("OIDC_CLIENT_ID", "cas").strip()
+    oidc_client_secret: str = os.getenv("OIDC_CLIENT_SECRET", "").strip()
+    oidc_redirect_uri: str = os.getenv(
+        "OIDC_REDIRECT_URI", "https://cas.nethub.wiki/api/auth/callback"
+    ).strip()
+    oidc_cookie_secure: bool = _env_bool("OIDC_COOKIE_SECURE", True)
+    oidc_state_expire_seconds: int = _env_int("OIDC_STATE_EXPIRE_SECONDS", 600, minimum=60)
+    local_session_expire_seconds: int = _env_int(
+        "LOCAL_SESSION_EXPIRE_SECONDS", 7 * 86400, minimum=300
+    )
+    cas_admin_subs: frozenset[str] = frozenset(
+        value.strip() for value in os.getenv("CAS_ADMIN_SUBS", "").split(",") if value.strip()
     )
 
 
@@ -73,6 +85,18 @@ def database_path() -> Path:
     return configured if configured.is_absolute() else PROJECT_ROOT / configured
 
 
+def _https_or_loopback(value: str) -> bool:
+    parsed = urlsplit(value)
+    if parsed.scheme == "https" and parsed.netloc:
+        return True
+    if parsed.scheme != "http" or not parsed.hostname or not parsed.netloc:
+        return False
+    try:
+        return ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return parsed.hostname.casefold() == "localhost"
+
+
 def validate_runtime_settings() -> None:
     if not settings.app_host:
         raise RuntimeError("APP_HOST 不能为空")
@@ -82,6 +106,9 @@ def validate_runtime_settings() -> None:
         raise RuntimeError("THUMBNAIL_WEBP_QUALITY 必须在 1-100 之间")
     if not 0 <= settings.thumbnail_webp_method <= 6:
         raise RuntimeError("THUMBNAIL_WEBP_METHOD 必须在 0-6 之间")
-    secret = settings.auth_secret_key.encode("utf-8")
-    if len(secret) < 32:
-        raise RuntimeError("AUTH_SECRET_KEY 未配置或长度不足 32 字节")
+    if not settings.oidc_issuer.startswith("https://"):
+        raise RuntimeError("OIDC_ISSUER 必须使用 https://")
+    if not settings.oidc_client_id or len(settings.oidc_client_secret) < 16:
+        raise RuntimeError("OIDC_CLIENT_ID 或 OIDC_CLIENT_SECRET 未正确配置")
+    if not _https_or_loopback(settings.oidc_redirect_uri):
+        raise RuntimeError("OIDC_REDIRECT_URI 必须使用 HTTPS（本机回环开发地址可使用 HTTP）")

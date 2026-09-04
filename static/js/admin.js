@@ -4,7 +4,7 @@
   const root = document.querySelector('[data-admin-app]');
   if (!root || !window.CASNotes) return;
 
-  const { api, formatDate, toast, token } = window.CASNotes;
+  const { api, formatDate, toast } = window.CASNotes;
   const state = {
     categories: [],
     galleries: [],
@@ -373,32 +373,22 @@
     )));
   }
 
-  function editUser(user = null) {
+  function editUser(user) {
     openDialog({
-      title: user ? '编辑用户' : '新建用户',
+      title: '管理本站成员',
       eyebrow: 'ACCOUNT',
       body(container) {
-        if (!user) container.append(field('用户名', input('username', '', { required: true, maxLength: 50 })));
         container.append(
           field('显示名称', input('displayName', user?.displayName, { required: true, maxLength: 50 })),
-          field(user ? '新密码（留空不修改）' : '初始密码', input('password', '', { type: 'password', required: !user, maxLength: 200 })),
           field('角色', select('role', [{ value: 'user', label: '普通用户' }, { value: 'admin', label: '管理员' }], user?.role || 'user')),
         );
-        if (user) container.append(checkbox('isActive', '允许该账号登录', user.isActive));
+        container.append(checkbox('isActive', '允许该账号使用本站', user.isActive));
       },
       async onSave(container) {
         const values = formData(container);
-        const payload = user ? {
-          display_name: values.displayName, role: values.role,
-          is_active: container.querySelector('[name="isActive"]').checked,
-          password: values.password || null,
-        } : {
-          username: values.username, display_name: values.displayName,
-          password: values.password, role: values.role,
-        };
-        await api(user ? `/api/admin/users/${user.id}` : '/api/admin/users', {
-          method: user ? 'PATCH' : 'POST', body: JSON.stringify(payload),
-        });
+        const payload = { display_name: values.displayName, role: values.role,
+          is_active: container.querySelector('[name="isActive"]').checked };
+        await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
         await Promise.all([loadUsers(), loadDashboard()]);
       },
     });
@@ -567,9 +557,6 @@
         await api('/api/admin/settings', {
           method: 'PATCH', body: JSON.stringify({
             site_name: values.siteName, site_tagline: values.siteTagline,
-            registration_enabled: settingsForm.elements.registrationEnabled.checked,
-            login_per_minute: Number(values.loginPerMinute),
-            register_per_hour: Number(values.registerPerHour),
             comment_per_minute: Number(values.commentPerMinute),
           }),
         });
@@ -579,7 +566,7 @@
 
     listen('[data-export]', 'click', async () => {
       try {
-        const response = await fetch('/api/admin/export', { headers: { Authorization: `Bearer ${token()}` } });
+        const response = await fetch('/api/admin/export', { credentials: 'same-origin' });
         if (!response.ok) throw new Error((await response.json()).detail || '导出失败');
         const url = URL.createObjectURL(await response.blob());
         const link = document.createElement('a');
@@ -608,10 +595,6 @@
   }
 
   async function initialize() {
-    if (!token()) {
-      window.location.replace('/login?next=/admin');
-      return;
-    }
     try {
       const { data: user } = await api('/api/auth/me');
       if (user.role !== 'admin') throw new Error('当前账号不是管理员');

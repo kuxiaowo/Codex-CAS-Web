@@ -120,6 +120,44 @@ class GalleryAssetTest(unittest.TestCase):
 
 
 class DatabaseMigrationTest(unittest.TestCase):
+    def test_v3_migration_disables_only_unbound_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "v3.db"
+            with patch.object(database, "database_path", return_value=path):
+                database.initialize_database()
+                with database.transaction() as connection:
+                    connection.execute(
+                        """INSERT INTO users
+                           (username, display_name, password_hash, auth_sub, role,
+                            is_active, created_at)
+                           VALUES ('bound', 'Bound', '', 'central-sub', 'user', 1, 'now')"""
+                    )
+                    connection.execute(
+                        """INSERT INTO users
+                           (username, display_name, password_hash, auth_sub, role,
+                            is_active, created_at)
+                           VALUES ('unbound', 'Unbound', '', NULL, 'admin', 1, 'now')"""
+                    )
+                    connection.execute("DROP TABLE oidc_logout_events")
+                    connection.execute("PRAGMA user_version = 3")
+
+                database.initialize_database()
+                migrated = database.connect()
+                try:
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
+                    states = dict(
+                        migrated.execute("SELECT username, is_active FROM users").fetchall()
+                    )
+                    self.assertEqual(states, {"bound": 1, "unbound": 0})
+                    self.assertTrue(
+                        migrated.execute(
+                            """SELECT 1 FROM sqlite_master
+                               WHERE type = 'table' AND name = 'oidc_logout_events'"""
+                        ).fetchone()
+                    )
+                finally:
+                    migrated.close()
+
     def test_v1_migration_preserves_non_content_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "legacy.db"
@@ -153,8 +191,16 @@ class DatabaseMigrationTest(unittest.TestCase):
                 database.initialize_database()
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 2)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
                     self.assertEqual(migrated.execute("SELECT username FROM users").fetchone()[0], "admin")
+                    self.assertEqual(migrated.execute("SELECT password_hash FROM users").fetchone()[0], "")
+                    self.assertEqual(migrated.execute("SELECT is_active FROM users").fetchone()[0], 0)
+                    self.assertIn("auth_sub", [row[1] for row in migrated.execute("PRAGMA table_info(users)")])
+                    self.assertTrue(
+                        migrated.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'oidc_logout_events'"
+                        ).fetchone()
+                    )
                     self.assertEqual(migrated.execute("SELECT name FROM categories").fetchone()[0], "旧栏目")
                     self.assertEqual(migrated.execute("SELECT COUNT(*) FROM categories").fetchone()[0], 1)
                     self.assertEqual(migrated.execute("SELECT title FROM announcements").fetchone()[0], "公告")

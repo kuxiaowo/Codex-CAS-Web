@@ -12,12 +12,23 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-from app.auth import admin_user, create_token, current_user, hash_password, verify_password
+from app.auth import (
+    admin_user,
+    browser_request_is_same_origin,
+    clear_session_cookie,
+    complete_oidc_login,
+    consume_login_state,
+    current_user,
+    revoke_backchannel_sessions,
+    revoke_current_session,
+    set_session_cookie,
+    start_oidc_login,
+)
 from app.config import PROJECT_ROOT, settings, validate_runtime_settings
 from app.database import connect, get_setting, initialize_database, transaction, utc_now
 from app.gallery_assets import (
@@ -41,11 +52,8 @@ from app.schemas import (
     AnnouncementInput,
     CategoryInput,
     CommentInput,
-    LoginInput,
     GalleryInput,
-    RegisterInput,
     SettingsInput,
-    UserCreateInput,
     UserUpdateInput,
 )
 
@@ -106,11 +114,20 @@ templates = Jinja2Templates(directory=TEMPLATE_DIR)
 
 @app.middleware("http")
 async def no_store_dynamic_pages(request: Request, call_next):
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path != "/api/auth/backchannel-logout"
+        and not browser_request_is_same_origin(request)
+    ):
+        return JSONResponse(status_code=403, content={"detail": "拒绝跨站请求"})
     response = await call_next(request)
     if not request.url.path.startswith(("/static/", "/resources/")):
         response.headers["Cache-Control"] = "no-store, max-age=0"
     elif request.url.path.startswith("/resources/"):
         response.headers["Cache-Control"] = "public, max-age=3600, must-revalidate"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
     return response
 
 
@@ -218,6 +235,7 @@ def _user_dict(row: sqlite3.Row | dict) -> dict:
         "id": data["id"],
         "username": data["username"],
         "displayName": data["display_name"],
+        "authSub": data.get("auth_sub"),
         "role": data["role"],
         "isActive": bool(data["is_active"]),
         "createdAt": data["created_at"],
@@ -337,18 +355,8 @@ def gallery_detail(request: Request, gallery_id: int):
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    connection = connect()
-    try:
-        context = {
-            "request": request,
-            "site": _site_context(connection),
-            "categories": _categories(connection),
-            "registrationEnabled": get_setting(connection, "registration_enabled", "true") == "true",
-        }
-    finally:
-        connection.close()
-    return templates.TemplateResponse(request, "login.html", context)
+def login_page(next: str = Query(default="/", max_length=1000)):
+    return start_oidc_login(next)
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -370,40 +378,40 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/api/auth/register", status_code=201)
-def register(payload: RegisterInput, request: Request):
-    if payload.password != payload.confirm_password:
-        raise HTTPException(status_code=400, detail="两次输入的密码不一致")
-    with transaction() as connection:
-        if get_setting(connection, "registration_enabled", "true") != "true":
-            raise HTTPException(status_code=403, detail="当前未开放注册")
-        limit = int(get_setting(connection, "register_per_hour", "5"))
-        _enforce_rate(connection, "register", _client_subject(request), limit, 3600)
-        try:
-            cursor = connection.execute(
-                """
-                INSERT INTO users (username, display_name, password_hash, role, is_active, created_at)
-                VALUES (?, ?, ?, 'user', 1, ?)
-                """,
-                (payload.username.strip(), payload.display_name.strip(), hash_password(payload.password), utc_now()),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise HTTPException(status_code=409, detail="用户名已存在") from exc
-        user_id = cursor.lastrowid
-    return {"accessToken": create_token(user_id), "tokenType": "bearer"}
+@app.get("/api/auth/callback")
+def oidc_callback(
+    code: str | None = Query(default=None, min_length=1, max_length=4096),
+    state: str = Query(min_length=1, max_length=512),
+    error: str | None = Query(default=None),
+):
+    if error:
+        consume_login_state(state)
+        raise HTTPException(status_code=401, detail="账号中心未完成授权")
+    if not code:
+        raise HTTPException(status_code=400, detail="账号中心回调缺少授权码")
+    _, return_path, session_token = complete_oidc_login(code, state)
+    response = RedirectResponse(return_path, status_code=303)
+    set_session_cookie(response, session_token)
+    return response
 
 
-@app.post("/api/auth/login")
-def login(payload: LoginInput, request: Request):
-    with transaction() as connection:
-        limit = int(get_setting(connection, "login_per_minute", "10"))
-        _enforce_rate(connection, "login", _client_subject(request), limit, 60)
-        user = connection.execute(
-            "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (payload.username.strip(),)
-        ).fetchone()
-        if not user or not user["is_active"] or not verify_password(payload.password, user["password_hash"]):
-            raise HTTPException(status_code=401, detail="用户名或密码错误")
-    return {"accessToken": create_token(user["id"]), "tokenType": "bearer"}
+@app.post("/api/auth/logout", status_code=204)
+def logout(request: Request):
+    revoke_current_session(request)
+    response = Response(status_code=204)
+    clear_session_cookie(response)
+    return response
+
+
+@app.post("/api/auth/backchannel-logout", status_code=204)
+def backchannel_logout(logout_token: str = Form(min_length=1, max_length=10000)):
+    revoke_backchannel_sessions(logout_token)
+    return Response(status_code=204)
+
+
+@app.api_route("/api/auth/{legacy_action}", methods=["POST", "PUT", "PATCH"])
+def legacy_auth_closed(legacy_action: str):
+    raise HTTPException(status_code=410, detail="本站已改用 NetHub Accounts 登录")
 
 
 @app.get("/api/auth/me")
@@ -473,7 +481,9 @@ def admin_dashboard(_: Annotated[dict, Depends(admin_user)]):
             "publishedGalleries": connection.execute(
                 "SELECT COUNT(*) FROM galleries WHERE status = 'published'"
             ).fetchone()[0],
-            "users": connection.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+            "users": connection.execute(
+                "SELECT COUNT(*) FROM users WHERE auth_sub IS NOT NULL"
+            ).fetchone()[0],
             "comments": connection.execute("SELECT COUNT(*) FROM comments").fetchone()[0],
             "views": connection.execute("SELECT COALESCE(SUM(views), 0) FROM galleries").fetchone()[0],
         }
@@ -494,33 +504,12 @@ def admin_users(_: Annotated[dict, Depends(admin_user)]):
     connection = connect()
     try:
         rows = connection.execute(
-            "SELECT id, username, display_name, role, is_active, created_at FROM users ORDER BY id DESC"
+            """SELECT id, username, display_name, auth_sub, role, is_active, created_at
+               FROM users WHERE auth_sub IS NOT NULL ORDER BY id DESC"""
         ).fetchall()
         return {"data": [_user_dict(row) for row in rows]}
     finally:
         connection.close()
-
-
-@app.post("/api/admin/users", status_code=201)
-def admin_create_user(
-    payload: UserCreateInput,
-    _: dict = Depends(admin_user),
-):
-    with transaction() as connection:
-        try:
-            cursor = connection.execute(
-                """
-                INSERT INTO users (username, display_name, password_hash, role, is_active, created_at)
-                VALUES (?, ?, ?, ?, 1, ?)
-                """,
-                (
-                    payload.username.strip(), payload.display_name.strip(),
-                    hash_password(payload.password), payload.role, utc_now(),
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise HTTPException(status_code=409, detail="用户名已存在") from exc
-    return {"data": {"id": cursor.lastrowid}}
 
 
 @app.patch("/api/admin/users/{user_id}")
@@ -532,21 +521,16 @@ def admin_update_user(
     if user_id == operator["id"] and (not payload.is_active or payload.role != "admin"):
         raise HTTPException(status_code=409, detail="不能停用自己或移除自己的管理员角色")
     with transaction() as connection:
-        if not connection.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone():
+        if not connection.execute(
+            "SELECT id FROM users WHERE id = ? AND auth_sub IS NOT NULL", (user_id,)
+        ).fetchone():
             raise HTTPException(status_code=404, detail="用户不存在")
-        if payload.password:
-            connection.execute(
-                """
-                UPDATE users SET display_name = ?, role = ?, is_active = ?, password_hash = ?
-                WHERE id = ?
-                """,
-                (payload.display_name.strip(), payload.role, int(payload.is_active), hash_password(payload.password), user_id),
-            )
-        else:
-            connection.execute(
-                "UPDATE users SET display_name = ?, role = ?, is_active = ? WHERE id = ?",
-                (payload.display_name.strip(), payload.role, int(payload.is_active), user_id),
-            )
+        connection.execute(
+            "UPDATE users SET display_name = ?, role = ?, is_active = ? WHERE id = ?",
+            (payload.display_name.strip(), payload.role, int(payload.is_active), user_id),
+        )
+        if not payload.is_active:
+            connection.execute("DELETE FROM local_sessions WHERE user_id = ?", (user_id,))
     return {"data": {"id": user_id}}
 
 
@@ -558,7 +542,9 @@ def admin_delete_user(
     if user_id == operator["id"]:
         raise HTTPException(status_code=409, detail="不能删除当前登录账号")
     with transaction() as connection:
-        cursor = connection.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        cursor = connection.execute(
+            "DELETE FROM users WHERE id = ? AND auth_sub IS NOT NULL", (user_id,)
+        )
         if not cursor.rowcount:
             raise HTTPException(status_code=404, detail="用户不存在")
 
@@ -824,9 +810,6 @@ def admin_settings(_: Annotated[dict, Depends(admin_user)]):
             "data": {
                 "siteName": get_setting(connection, "site_name", "CAS Gallery"),
                 "siteTagline": get_setting(connection, "site_tagline", ""),
-                "registrationEnabled": get_setting(connection, "registration_enabled", "true") == "true",
-                "loginPerMinute": int(get_setting(connection, "login_per_minute", "10")),
-                "registerPerHour": int(get_setting(connection, "register_per_hour", "5")),
                 "commentPerMinute": int(get_setting(connection, "comment_per_minute", "8")),
             }
         }
@@ -842,9 +825,6 @@ def admin_update_settings(
     values = {
         "site_name": payload.site_name.strip(),
         "site_tagline": payload.site_tagline.strip(),
-        "registration_enabled": str(payload.registration_enabled).lower(),
-        "login_per_minute": str(payload.login_per_minute),
-        "register_per_hour": str(payload.register_per_hour),
         "comment_per_minute": str(payload.comment_per_minute),
     }
     with transaction() as connection:
