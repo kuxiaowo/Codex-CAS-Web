@@ -101,6 +101,8 @@ class AppTest(unittest.TestCase):
         self.assertIn('target="_blank" rel="noopener noreferrer"', response.text)
         self.assertIn('href="/auth/login?next=/"', response.text)
         self.assertIn("前往账户中心", response.text)
+        self.assertIn('class="account-center-button"', response.text)
+        self.assertIn('role="button"', response.text)
         self.assertIn('class="site-footer"', response.text)
         self.assertIn("Net</span><span class=\"nethub-hub\">Hub", response.text)
         self.assertIn('class="site-footer-team codex-brand">Codex', response.text)
