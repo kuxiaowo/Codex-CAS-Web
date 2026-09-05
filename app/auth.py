@@ -222,6 +222,11 @@ def complete_oidc_login(
         raise HTTPException(status_code=401, detail="账号中心用户资料不匹配")
     identity["preferred_username"] = userinfo.get("preferred_username", identity.get("preferred_username"))
     identity["name"] = userinfo.get("name", identity.get("name"))
+    picture = str(userinfo.get("picture") or identity.get("picture") or "").strip()
+    expected_picture = f"{settings.oidc_issuer}/avatars/{identity['sub']}"
+    if picture and picture != expected_picture:
+        raise HTTPException(status_code=401, detail="账号中心返回了不可信的头像地址")
+    identity["picture"] = expected_picture
     user = provision_user(identity)
     return user, login_state["return_path"], create_local_session(user, identity.get("sid", ""))
 

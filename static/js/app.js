@@ -47,6 +47,13 @@
       name.textContent = data.displayName;
       role.textContent = data.role === 'admin' ? '管理员账户' : `@${data.username}`;
       avatar.textContent = data.displayName.trim().slice(0, 1).toUpperCase();
+      if (data.avatarUrl) {
+        const image = document.createElement('img');
+        image.src = data.avatarUrl;
+        image.alt = '';
+        image.addEventListener('error', () => image.remove(), { once: true });
+        avatar.append(image);
+      }
       adminLink?.classList.toggle('is-hidden', data.role !== 'admin');
       action.href = '#logout';
       action.setAttribute('aria-label', '退出本站');
@@ -97,6 +104,11 @@
         data.forEach((comment) => {
           const item = document.createElement('article'); item.className = 'comment-item';
           const header = document.createElement('header'); const author = document.createElement('strong'); const time = document.createElement('time'); const content = document.createElement('p');
+          if (comment.authorAvatarUrl) {
+            const avatar = document.createElement('span'); avatar.className = 'comment-author-avatar'; avatar.textContent = comment.author.trim().slice(0, 1).toUpperCase();
+            const image = document.createElement('img'); image.src = comment.authorAvatarUrl; image.alt = ''; image.addEventListener('error', () => image.remove(), { once: true });
+            avatar.append(image); header.append(avatar);
+          }
           author.textContent = comment.author; time.textContent = formatDate(comment.createdAt); content.textContent = comment.content;
           header.append(author, time); item.append(header, content); list.append(item);
         });

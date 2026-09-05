@@ -237,6 +237,9 @@ def _user_dict(row: sqlite3.Row | dict) -> dict:
         "id": data["id"],
         "username": data["username"],
         "displayName": data["display_name"],
+        "avatarUrl": (
+            f"{settings.oidc_issuer}/avatars/{data['auth_sub']}" if data.get("auth_sub") else ""
+        ),
         "authSub": data.get("auth_sub"),
         "role": data["role"],
         "isActive": bool(data["is_active"]),
@@ -252,6 +255,9 @@ def _comment_dict(row: sqlite3.Row) -> dict:
         "galleryTitle": data.get("gallery_title"),
         "userId": data["user_id"],
         "author": data.get("display_name", "已注销用户"),
+        "authorAvatarUrl": (
+            f"{settings.oidc_issuer}/avatars/{data['auth_sub']}" if data.get("auth_sub") else ""
+        ),
         "parentId": data["parent_id"],
         "content": data["content"],
         "status": data["status"],
@@ -454,7 +460,7 @@ def list_comments(gallery_id: int):
     try:
         rows = connection.execute(
             """
-            SELECT c.*, u.display_name
+            SELECT c.*, u.display_name, u.auth_sub
             FROM comments c JOIN users u ON u.id = c.user_id
             WHERE c.gallery_id = ? AND c.status = 'visible'
             ORDER BY c.created_at, c.id
@@ -803,7 +809,7 @@ def admin_comments(_: Annotated[dict, Depends(admin_user)]):
     try:
         rows = connection.execute(
             """
-            SELECT c.*, u.display_name, g.title AS gallery_title
+            SELECT c.*, u.display_name, u.auth_sub, g.title AS gallery_title
             FROM comments c
             JOIN users u ON u.id = c.user_id
             JOIN galleries g ON g.id = c.gallery_id
