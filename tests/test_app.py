@@ -96,6 +96,8 @@ class AppTest(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("图集", response.text)
+        self.assertIn('href="https://auth.nethub.wiki/account"', response.text)
+        self.assertIn("前往账户中心", response.text)
         self.assertEqual(self.client.get("/api/health").json(), {"status": "ok"})
 
     def test_admin_page_contains_initialized_controls_and_versioned_script(self) -> None:

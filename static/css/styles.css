@@ -183,6 +183,8 @@ svg { width: 1.2em; fill: none; stroke: currentColor; stroke-linecap: round; str
 .account-copy small { color: var(--quiet); font-size: 11px; }
 .account-action { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); }
 .account-action:hover { color: var(--text); background: rgba(67,71,101,.06); }
+.account-center-link { min-height: 36px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 9px; color: var(--violet); background: rgba(113,97,216,.06); font-size: 12px; font-weight: 800; text-decoration: none; }
+.account-center-link:hover { border-color: rgba(113,97,216,.35); background: rgba(113,97,216,.12); }
 .mobile-menu, .sidebar-scrim { display: none; }
 
 .page { min-height: 100vh; margin-left: var(--sidebar-width); }
