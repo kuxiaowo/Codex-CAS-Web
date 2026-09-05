@@ -41,9 +41,9 @@ Caddy 反代示例见 [`docs/Caddyfile.example`](docs/Caddyfile.example)。
 python -m app.cli register-client \
   --client-id cas \
   --name "Codex CAS" \
-  --redirect-uri https://cas.nethub.wiki/api/auth/callback \
-  --launch-uri https://cas.nethub.wiki/ \
-  --backchannel-logout-uri https://cas.nethub.wiki/api/auth/backchannel-logout
+  --redirect-uri https://codex.nethub.wiki/api/auth/callback \
+  --launch-uri https://codex.nethub.wiki/ \
+  --backchannel-logout-uri https://codex.nethub.wiki/api/auth/backchannel-logout
 ```
 
 客户端密钥只显示一次，应立即写入 CAS 的 `.env`，且不得提交到 Git。

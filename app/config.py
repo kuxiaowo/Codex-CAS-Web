@@ -65,7 +65,7 @@ class Settings:
     oidc_client_id: str = os.getenv("OIDC_CLIENT_ID", "cas").strip()
     oidc_client_secret: str = os.getenv("OIDC_CLIENT_SECRET", "").strip()
     oidc_redirect_uri: str = os.getenv(
-        "OIDC_REDIRECT_URI", "https://cas.nethub.wiki/api/auth/callback"
+        "OIDC_REDIRECT_URI", "https://codex.nethub.wiki/api/auth/callback"
     ).strip()
     oidc_cookie_secure: bool = _env_bool("OIDC_COOKIE_SECURE", True)
     oidc_state_expire_seconds: int = _env_int("OIDC_STATE_EXPIRE_SECONDS", 600, minimum=60)
