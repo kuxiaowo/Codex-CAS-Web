@@ -14,16 +14,6 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True)
 
 
-class LoginInput(ApiModel):
-    username: str = Field(min_length=2, max_length=50)
-    password: str = Field(min_length=8, max_length=200)
-
-
-class RegisterInput(LoginInput):
-    display_name: str = Field(min_length=1, max_length=50)
-    confirm_password: str = Field(min_length=8, max_length=200)
-
-
 class CommentInput(ApiModel):
     content: str = Field(min_length=1, max_length=1000)
     parent_id: int | None = None
@@ -57,18 +47,9 @@ class UserUpdateInput(ApiModel):
     display_name: str = Field(min_length=1, max_length=50)
     role: str = Field(pattern=r"^(admin|user)$")
     is_active: bool = True
-    password: str | None = Field(default=None, min_length=8, max_length=200)
-
-
-class UserCreateInput(LoginInput):
-    display_name: str = Field(min_length=1, max_length=50)
-    role: str = Field(default="user", pattern=r"^(admin|user)$")
 
 
 class SettingsInput(ApiModel):
     site_name: str = Field(min_length=1, max_length=50)
     site_tagline: str = Field(min_length=1, max_length=160)
-    registration_enabled: bool
-    login_per_minute: int = Field(ge=1, le=1000)
-    register_per_hour: int = Field(ge=1, le=1000)
     comment_per_minute: int = Field(ge=1, le=1000)

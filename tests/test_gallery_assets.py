@@ -62,8 +62,8 @@ class GalleryAssetTest(unittest.TestCase):
         first_url = gallery_assets.ensure_thumbnail(source)
         thumb = gallery / ".thumbs" / "page.jpg.webp"
         with Image.open(thumb) as image:
-            self.assertLessEqual(image.width, 1600)
-            self.assertLessEqual(image.height, 4000)
+            self.assertLessEqual(image.width, gallery_assets.settings.thumbnail_max_width)
+            self.assertLessEqual(image.height, gallery_assets.settings.thumbnail_max_height)
             self.assertAlmostEqual(image.width / image.height, 1 / 3, places=2)
         previous_mtime = thumb.stat().st_mtime_ns
 
@@ -72,7 +72,7 @@ class GalleryAssetTest(unittest.TestCase):
         os.utime(source, ns=(source_time, source_time))
         second_url = gallery_assets.ensure_thumbnail(source)
         with Image.open(thumb) as image:
-            self.assertEqual(image.size, (1200, 1200))
+            self.assertEqual(image.size, (640, 640))
         self.assertNotEqual(first_url, second_url)
 
     def test_thumbnail_applies_exif_orientation(self) -> None:
@@ -88,8 +88,76 @@ class GalleryAssetTest(unittest.TestCase):
         with Image.open(gallery / ".thumbs" / "rotated.jpg.webp") as thumbnail:
             self.assertEqual(thumbnail.size, (80, 40))
 
+    def test_full_sync_recurses_generates_updates_and_removes_orphans(self) -> None:
+        gallery = self.root / "subject" / "lesson"
+        gallery.mkdir(parents=True)
+        source = gallery / "page.jpg"
+        Image.new("RGB", (1200, 800), "white").save(source)
+        thumb_dir = gallery / ".thumbs"
+        thumb_dir.mkdir()
+        Image.new("RGB", (10, 10), "black").save(thumb_dir / "deleted.jpg.webp", "WEBP")
+
+        first = gallery_assets.sync_all_thumbnails()
+        thumb = gallery_assets.thumbnail_path(source)
+        self.assertEqual(first.scanned, 1)
+        self.assertEqual(first.generated, 1)
+        self.assertEqual(first.removed, 1)
+        self.assertTrue(thumb.is_file())
+        self.assertFalse((thumb_dir / "deleted.jpg.webp").exists())
+
+        second = gallery_assets.sync_all_thumbnails()
+        self.assertEqual(second.generated, 0)
+        self.assertEqual(second.current, 1)
+
+        previous_mtime = thumb.stat().st_mtime_ns
+        Image.new("RGB", (800, 1200), "blue").save(source)
+        source_time = max(source.stat().st_mtime_ns, previous_mtime + 10_000_000)
+        os.utime(source, ns=(source_time, source_time))
+        third = gallery_assets.sync_all_thumbnails()
+        self.assertEqual(third.generated, 1)
+        with Image.open(thumb) as image:
+            self.assertEqual(image.size, (427, 640))
+
 
 class DatabaseMigrationTest(unittest.TestCase):
+    def test_v3_migration_disables_only_unbound_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "v3.db"
+            with patch.object(database, "database_path", return_value=path):
+                database.initialize_database()
+                with database.transaction() as connection:
+                    connection.execute(
+                        """INSERT INTO users
+                           (username, display_name, password_hash, auth_sub, role,
+                            is_active, created_at)
+                           VALUES ('bound', 'Bound', '', 'central-sub', 'user', 1, 'now')"""
+                    )
+                    connection.execute(
+                        """INSERT INTO users
+                           (username, display_name, password_hash, auth_sub, role,
+                            is_active, created_at)
+                           VALUES ('unbound', 'Unbound', '', NULL, 'admin', 1, 'now')"""
+                    )
+                    connection.execute("DROP TABLE oidc_logout_events")
+                    connection.execute("PRAGMA user_version = 3")
+
+                database.initialize_database()
+                migrated = database.connect()
+                try:
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
+                    states = dict(
+                        migrated.execute("SELECT username, is_active FROM users").fetchall()
+                    )
+                    self.assertEqual(states, {"bound": 1, "unbound": 0})
+                    self.assertTrue(
+                        migrated.execute(
+                            """SELECT 1 FROM sqlite_master
+                               WHERE type = 'table' AND name = 'oidc_logout_events'"""
+                        ).fetchone()
+                    )
+                finally:
+                    migrated.close()
+
     def test_v1_migration_preserves_non_content_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "legacy.db"
@@ -123,8 +191,16 @@ class DatabaseMigrationTest(unittest.TestCase):
                 database.initialize_database()
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 2)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
                     self.assertEqual(migrated.execute("SELECT username FROM users").fetchone()[0], "admin")
+                    self.assertEqual(migrated.execute("SELECT password_hash FROM users").fetchone()[0], "")
+                    self.assertEqual(migrated.execute("SELECT is_active FROM users").fetchone()[0], 0)
+                    self.assertIn("auth_sub", [row[1] for row in migrated.execute("PRAGMA table_info(users)")])
+                    self.assertTrue(
+                        migrated.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'oidc_logout_events'"
+                        ).fetchone()
+                    )
                     self.assertEqual(migrated.execute("SELECT name FROM categories").fetchone()[0], "旧栏目")
                     self.assertEqual(migrated.execute("SELECT COUNT(*) FROM categories").fetchone()[0], 1)
                     self.assertEqual(migrated.execute("SELECT title FROM announcements").fetchone()[0], "公告")

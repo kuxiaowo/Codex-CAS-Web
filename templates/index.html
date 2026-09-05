@@ -29,7 +29,7 @@
     {% for gallery in galleries %}
     <a class="gallery-card" href="/galleries/{{ gallery.id }}">
       <span class="gallery-cover">
-        {% if gallery.coverThumbSrc %}<img src="{{ gallery.coverThumbSrc }}" alt="" loading="{{ 'eager' if loop.index <= 3 else 'lazy' }}">{% else %}<span class="gallery-cover-empty" aria-hidden="true">暂无图片</span>{% endif %}
+        {% if gallery.coverThumbSrc %}<img src="{{ gallery.coverThumbSrc }}" alt="" loading="{{ 'eager' if loop.index <= 3 else 'lazy' }}" decoding="async">{% else %}<span class="gallery-cover-empty" aria-hidden="true">暂无图片</span>{% endif %}
       </span>
       <span class="gallery-card-body">
         <span class="gallery-card-meta"><span>{{ gallery.categoryName }}</span>{% if gallery.isFeatured %}<em>精选</em>{% endif %}</span>

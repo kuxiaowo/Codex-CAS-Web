@@ -4,6 +4,7 @@ import importlib
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -24,7 +25,8 @@ class AppTest(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory()
         cls.root = Path(cls.temp_dir.name)
         os.environ["DATABASE_PATH"] = str(cls.root / "test.db")
-        os.environ["AUTH_SECRET_KEY"] = "test-secret-key-that-is-longer-than-thirty-two-bytes"
+        os.environ["OIDC_CLIENT_SECRET"] = "test-client-secret-that-is-longer-than-sixteen-bytes"
+        os.environ["OIDC_COOKIE_SECURE"] = "false"
         import app.config
         import app.database
         import app.auth
@@ -47,12 +49,14 @@ class AppTest(unittest.TestCase):
         cls.database = app.database
         cls.client = TestClient(app.main.app)
         cls.client.__enter__()
-        from app.bootstrap_admin import create_initial_admin
-        create_initial_admin("admin", "admin-pass-123", "管理员")
-        response = cls.client.post(
-            "/api/auth/login", json={"username": "admin", "password": "admin-pass-123"}
-        )
-        cls.admin_auth = {"Authorization": f"Bearer {response.json()['accessToken']}"}
+        with cls.database.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO users (username, display_name, password_hash, auth_sub, role, is_active, created_at)
+                   VALUES ('admin', '管理员', '', 'test-admin-sub', 'admin', 1, 'now')"""
+            )
+            cls.admin_id = cursor.lastrowid
+        from app.auth import create_local_session, SESSION_COOKIE
+        cls.client.cookies.set(SESSION_COOKIE, create_local_session({"id": cls.admin_id, "auth_sub": "test-admin-sub"}, "admin-sid"))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -62,7 +66,7 @@ class AppTest(unittest.TestCase):
         cls.temp_dir.cleanup()
 
     def admin_headers(self) -> dict[str, str]:
-        return self.admin_auth
+        return {}
 
     def category_id(self) -> int:
         return self.client.get("/api/admin/categories", headers=self.admin_headers()).json()["data"][0]["id"]
@@ -84,6 +88,8 @@ class AppTest(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 201, response.text)
+        self.assertTrue((directory / ".thumbs" / "2.jpg.webp").is_file())
+        self.assertTrue((directory / ".thumbs" / "10.jpg.webp").is_file())
         return response.json()["data"]
 
     def test_home_empty_and_health(self) -> None:
@@ -104,6 +110,18 @@ class AppTest(unittest.TestCase):
         self.assertGreaterEqual(response.text.count('type="button" value="cancel"'), 2)
         self.assertGreaterEqual(response.text.count("data-dialog-close"), 2)
 
+    def test_admin_member_list_excludes_unbound_development_accounts(self) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO users
+                   (username, display_name, password_hash, auth_sub, role, is_active, created_at)
+                   VALUES ('legacy-dev', 'Legacy Dev', '', NULL, 'user', 0, 'now')"""
+            )
+        users = self.client.get("/api/admin/users").json()["data"]
+        self.assertNotIn("legacy-dev", {item["username"] for item in users})
+        dashboard = self.client.get("/api/admin/dashboard").json()["data"]
+        self.assertEqual(dashboard["counts"]["users"], len(users))
+
     def test_gallery_crud_search_detail_and_natural_sort(self) -> None:
         gallery = self.create_gallery("scan-pages")
         listed = self.client.get("/?q=scan-pages")
@@ -112,6 +130,12 @@ class AppTest(unittest.TestCase):
         detail = self.client.get(f"/galleries/{gallery['id']}")
         self.assertEqual(detail.status_code, 200)
         self.assertLess(detail.text.index("2.jpg"), detail.text.index("10.jpg"))
+        image_sources = re.findall(
+            r'<img src="([^"]+)" data-original-src="([^"]+)"', detail.text
+        )
+        self.assertEqual(len(image_sources), 2)
+        self.assertTrue(all("/.thumbs/" in preview for preview, _ in image_sources))
+        self.assertTrue(all("/.thumbs/" not in original for _, original in image_sources))
         admin = self.client.get("/api/admin/galleries", headers=self.admin_headers()).json()["data"]
         item = next(value for value in admin if value["id"] == gallery["id"])
         self.assertEqual(item["imageCount"], 2)
@@ -131,20 +155,19 @@ class AppTest(unittest.TestCase):
 
     def test_comments_use_gallery_relation(self) -> None:
         gallery = self.create_gallery("comments")
-        registered = self.client.post(
-            "/api/auth/register",
-            json={
-                "username": "reader", "displayName": "读者", "password": "reader-pass-123",
-                "confirmPassword": "reader-pass-123",
-            },
-        )
-        self.assertEqual(registered.status_code, 201, registered.text)
-        headers = {"Authorization": f"Bearer {registered.json()['accessToken']}"}
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO users (username, display_name, password_hash, auth_sub, role, is_active, created_at)
+                   VALUES ('reader', '读者', '', 'test-reader-sub', 'user', 1, 'now')"""
+            )
+        from app.auth import create_local_session, SESSION_COOKIE
+        original_cookie = self.client.cookies.get(SESSION_COOKIE)
+        self.client.cookies.set(SESSION_COOKIE, create_local_session({"id": cursor.lastrowid, "auth_sub": "test-reader-sub"}, "reader-sid"))
         posted = self.client.post(
             f"/api/galleries/{gallery['id']}/comments",
-            headers=headers,
             json={"content": "这份图集很清楚。"},
         )
+        self.client.cookies.set(SESSION_COOKIE, original_cookie)
         self.assertEqual(posted.status_code, 201, posted.text)
         comments = self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
         self.assertEqual(comments[0]["content"], "这份图集很清楚。")
@@ -161,6 +184,7 @@ class AppTest(unittest.TestCase):
             files={"file": ("001.jpg", image_bytes(), "image/jpeg")},
         )
         self.assertEqual(uploaded.status_code, 201, uploaded.text)
+        self.assertTrue((self.resource_dir / "资料" / ".thumbs" / "001.jpg.webp").is_file())
         tree = self.client.get("/api/admin/files/tree", headers=headers, params={"path": "资料"})
         self.assertEqual(tree.json()["data"][0]["name"], "001.jpg")
 
@@ -174,6 +198,8 @@ class AppTest(unittest.TestCase):
         )
         self.assertEqual(batch.status_code, 201, batch.text)
         self.assertTrue((self.resource_dir / "批量" / "子目录" / "2.png").is_file())
+        self.assertTrue((self.resource_dir / "批量" / ".thumbs" / "1.png.webp").is_file())
+        self.assertTrue((self.resource_dir / "批量" / "子目录" / ".thumbs" / "2.png.webp").is_file())
 
     def test_file_security_and_invalid_upload(self) -> None:
         headers = self.admin_headers()
