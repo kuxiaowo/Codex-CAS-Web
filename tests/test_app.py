@@ -98,12 +98,21 @@ class AppTest(unittest.TestCase):
         self.assertIn("Note Gallery", response.text)
         self.assertIn("图集", response.text)
         self.assertIn('href="https://auth.nethub.wiki/account"', response.text)
+        self.assertIn('target="_blank" rel="noopener noreferrer"', response.text)
+        self.assertIn('href="/auth/login?next=/"', response.text)
         self.assertIn("前往账户中心", response.text)
         self.assertIn('class="site-footer"', response.text)
         self.assertIn("Net</span><span class=\"nethub-hub\">Hub", response.text)
         self.assertIn('class="site-footer-team codex-brand">Codex', response.text)
         self.assertIn("小组创建与维护", response.text)
         self.assertEqual(self.client.get("/api/health").json(), {"status": "ok"})
+
+    def test_login_action_opens_accounts_flow_in_new_tab(self) -> None:
+        response = self.client.get("/login?next=/admin")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('href="/auth/login?next=/admin"', response.text)
+        self.assertIn('target="_blank" rel="noopener noreferrer"', response.text)
 
     def test_admin_page_contains_initialized_controls_and_versioned_script(self) -> None:
         response = self.client.get("/admin")
