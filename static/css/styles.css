@@ -256,13 +256,9 @@ svg { width: 1.2em; fill: none; stroke: currentColor; stroke-linecap: round; str
   text-align: center;
   backdrop-filter: blur(18px) saturate(115%);
 }
-.site-footer-brand { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; }
-.site-footer-brand > strong { color: var(--text); font-size: 14px; letter-spacing: -.02em; }
-.site-footer-mark { width: 34px; height: 34px; border-radius: 10px; }
-.site-footer-mark span { width: 16px; height: 4px; }
-.site-footer-mark span:nth-child(1) { transform: translateY(-6px); }
-.site-footer-mark span:nth-child(2) { width: 11px; }
-.site-footer-mark span:nth-child(3) { width: 7px; transform: translateY(6px); }
+.site-footer-brand { display: flex; flex: 0 0 auto; flex-direction: column; align-items: center; gap: 2px; }
+.site-footer-brand > strong { font-size: 18px; line-height: 1; letter-spacing: -.04em; }
+.site-footer-logo { display: block; width: 52px; height: 52px; object-fit: contain; }
 .site-footer p { margin: 0; }
 .site-footer-team { font-weight: 850; }
 .nethub-net { color: #202334; }
