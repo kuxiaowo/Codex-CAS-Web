@@ -1,1 +1,1 @@
-"""CAS Gallery 一体化图片图集站。"""
+"""Note Gallery 一体化图片图集站。"""

@@ -193,7 +193,7 @@ PRAGMA user_version = 4;
 """
 
 DEFAULT_SETTINGS = {
-    "site_name": "CAS Gallery",
+    "site_name": "Note Gallery",
     "site_tagline": "一个简单的笔记集合站。",
     "comment_per_minute": "8",
 }
@@ -256,6 +256,13 @@ def initialize_database() -> None:
                 "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
                 (key, value, now),
             )
+        connection.execute(
+            """
+            UPDATE settings SET value = ?, updated_at = ?
+            WHERE key = 'site_name' AND value = 'CAS Gallery'
+            """,
+            (DEFAULT_SETTINGS["site_name"], now),
+        )
         if connection.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             connection.execute(
                 """

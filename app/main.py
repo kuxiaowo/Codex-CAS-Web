@@ -104,7 +104,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="CAS Gallery",
+    title="Note Gallery",
     description="一体化图片图集站",
     version="0.1.0",
     lifespan=lifespan,
@@ -135,7 +135,7 @@ async def no_store_dynamic_pages(request: Request, call_next):
 
 def _site_context(connection: sqlite3.Connection) -> dict:
     return {
-        "siteName": get_setting(connection, "site_name", "CAS Gallery"),
+        "siteName": get_setting(connection, "site_name", "Note Gallery"),
         "siteTagline": get_setting(
             connection,
             "site_tagline",
@@ -844,7 +844,7 @@ def admin_settings(_: Annotated[dict, Depends(admin_user)]):
     try:
         return {
             "data": {
-                "siteName": get_setting(connection, "site_name", "CAS Gallery"),
+                "siteName": get_setting(connection, "site_name", "Note Gallery"),
                 "siteTagline": get_setting(connection, "site_tagline", ""),
                 "commentPerMinute": int(get_setting(connection, "comment_per_minute", "8")),
             }

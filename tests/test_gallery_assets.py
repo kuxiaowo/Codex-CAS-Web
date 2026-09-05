@@ -120,6 +120,28 @@ class GalleryAssetTest(unittest.TestCase):
 
 
 class DatabaseMigrationTest(unittest.TestCase):
+    def test_legacy_default_site_name_is_renamed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "legacy-name.db"
+            with patch.object(database, "database_path", return_value=path):
+                database.initialize_database()
+                with database.transaction() as connection:
+                    connection.execute(
+                        "UPDATE settings SET value = 'CAS Gallery' WHERE key = 'site_name'"
+                    )
+
+                database.initialize_database()
+                migrated = database.connect()
+                try:
+                    self.assertEqual(
+                        migrated.execute(
+                            "SELECT value FROM settings WHERE key = 'site_name'"
+                        ).fetchone()[0],
+                        "Note Gallery",
+                    )
+                finally:
+                    migrated.close()
+
     def test_v3_migration_disables_only_unbound_accounts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "v3.db"

@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f7f8fc">
   <title>{% block title %}{{ site.siteName }}{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/css/styles.css?v=gallery-v2.1">
+  <link rel="stylesheet" href="/static/css/styles.css?v=gallery-v2.2">
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -77,6 +77,22 @@
   <main class="page" id="main-content">
     {% block content %}{% endblock %}
   </main>
+
+  <footer class="site-footer">
+    <div class="site-footer-brand" aria-label="{{ site.siteName }}">
+      <span class="brand-mark site-footer-mark" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </span>
+      <strong>{{ site.siteName }}</strong>
+    </div>
+    <p>
+      由
+      <strong class="site-footer-team"><span class="nethub-net">Net</span><span class="nethub-hub">Hub</span></strong>
+      和
+      <strong class="site-footer-team codex-brand">Codex</strong>
+      小组创建与维护
+    </p>
+  </footer>
 
   <div class="toast-region" aria-live="polite" aria-atomic="true" data-toast-region></div>
   <script src="/static/js/app.js?v=gallery-v2.1" defer></script>
