@@ -357,8 +357,27 @@ def gallery_detail(request: Request, gallery_id: int):
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(next: str = Query(default="/", max_length=1000)):
-    return start_oidc_login(next)
+def login_page(request: Request, next: str = Query(default="/", max_length=1000)):
+    with transaction() as connection:
+        context = {
+            "request": request,
+            "site": _site_context(connection),
+            "next": next,
+        }
+    return templates.TemplateResponse(request, "login.html", context)
+
+
+@app.get("/auth/login")
+def start_login(
+    next: str = Query(default="/", max_length=1000),
+    prompt: str | None = Query(default=None),
+    screen_hint: str | None = Query(default=None),
+):
+    return start_oidc_login(
+        next,
+        prompt="none" if prompt == "none" else None,
+        screen_hint="signup" if screen_hint == "signup" else None,
+    )
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -389,8 +408,13 @@ def oidc_callback(
 ):
     browser_state = request.cookies.get(OIDC_FLOW_COOKIE)
     if error:
-        consume_login_state(state, browser_state)
-        raise HTTPException(status_code=401, detail="账号中心未完成授权")
+        login_state = consume_login_state(state, browser_state)
+        destination = request.url_for("login_page").include_query_params(
+            next=login_state["return_path"]
+        )
+        response = RedirectResponse(destination, status_code=303)
+        clear_oidc_flow_cookie(response)
+        return response
     if not code:
         raise HTTPException(status_code=400, detail="账号中心回调缺少授权码")
     _, return_path, session_token = complete_oidc_login(code, state, browser_state)

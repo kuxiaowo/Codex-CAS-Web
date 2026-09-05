@@ -69,7 +69,12 @@ def browser_request_is_same_origin(request: Request) -> bool:
     )
 
 
-def start_oidc_login(return_path: str) -> RedirectResponse:
+def start_oidc_login(
+    return_path: str,
+    *,
+    prompt: str | None = None,
+    screen_hint: str | None = None,
+) -> RedirectResponse:
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
@@ -83,14 +88,17 @@ def start_oidc_login(return_path: str) -> RedirectResponse:
             """,
             (_token_hash(state), nonce, verifier, safe_return_path(return_path), _future(settings.oidc_state_expire_seconds)),
         )
-    query = urlencode(
-        {
+    parameters = {
             "response_type": "code", "client_id": settings.oidc_client_id,
             "redirect_uri": settings.oidc_redirect_uri, "scope": "openid profile",
             "state": state, "nonce": nonce, "code_challenge": challenge,
             "code_challenge_method": "S256",
-        }
-    )
+    }
+    if prompt:
+        parameters["prompt"] = prompt
+    if screen_hint:
+        parameters["screen_hint"] = screen_hint
+    query = urlencode(parameters)
     response = RedirectResponse(
         f"{settings.oidc_issuer}/oauth/authorize?{query}", status_code=302
     )

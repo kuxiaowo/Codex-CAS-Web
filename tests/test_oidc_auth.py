@@ -94,7 +94,7 @@ class OidcAuthTest(unittest.TestCase):
         return patch("app.auth.httpx.get", side_effect=get), patch("app.auth.httpx.post", side_effect=post)
 
     def begin_login(self) -> dict:
-        result = self.client.get("/login?next=/admin", follow_redirects=False)
+        result = self.client.get("/auth/login?next=/admin", follow_redirects=False)
         self.assertEqual(result.status_code, 302)
         query = parse_qs(urlsplit(result.headers["location"]).query)
         self.assertEqual(query["code_challenge_method"], ["S256"])
@@ -210,9 +210,11 @@ class OidcAuthTest(unittest.TestCase):
     def test_error_callback_does_not_require_code_and_consumes_state(self) -> None:
         request = self.begin_login()
         result = self.client.get(
-            f"/api/auth/callback?error=access_denied&state={request['state']}"
+            f"/api/auth/callback?error=access_denied&state={request['state']}",
+            follow_redirects=False,
         )
-        self.assertEqual(result.status_code, 401)
+        self.assertEqual(result.status_code, 303)
+        self.assertIn("/login?", result.headers["location"])
         replay = self.client.get(
             f"/api/auth/callback?error=access_denied&state={request['state']}"
         )

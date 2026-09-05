@@ -53,7 +53,10 @@
       action.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M14 8l4 4-4 4M18 12H7M10 4H4v16h6"/></svg>';
       action.addEventListener('click', async (event) => {
         event.preventDefault();
-        try { await api('/api/auth/logout', { method: 'POST' }); } finally { window.location.assign('/'); }
+        try { await api('/api/auth/logout', { method: 'POST' }); } finally {
+          window.localStorage.setItem('cas-sso-suppressed-until', String(Date.now() + 10 * 60 * 1000));
+          window.location.assign('/');
+        }
       }, { once: true });
       return data;
     } catch { return null; }
@@ -125,6 +128,21 @@
 
   window.CASNotes = Object.freeze({ api, formatDate, refreshAccount, toast, currentAccount: () => account });
   initNavigation();
-  refreshAccount().then(initComments);
+  refreshAccount().then((user) => {
+    initComments();
+    if (window.location.pathname === '/login') return;
+    if (user) {
+      window.sessionStorage.removeItem('cas-sso-probe');
+      window.localStorage.removeItem('cas-sso-suppressed-until');
+      return;
+    }
+    const alreadyProbed = window.sessionStorage.getItem('cas-sso-probe') === '1';
+    const suppressedUntil = Number(window.localStorage.getItem('cas-sso-suppressed-until') || 0);
+    if (!alreadyProbed && Date.now() >= suppressedUntil) {
+      window.sessionStorage.setItem('cas-sso-probe', '1');
+      const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      window.location.assign(`/auth/login?prompt=none&next=${encodeURIComponent(next)}`);
+    }
+  });
   initGalleryViewer();
 })();

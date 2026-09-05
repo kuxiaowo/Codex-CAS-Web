@@ -296,6 +296,9 @@ input:focus, textarea:focus, select:focus { border-color: rgba(113,97,216,.52); 
 .auth-decoration span:nth-child(2) { width: 50%; top: 26px; }
 .auth-decoration span:nth-child(3) { width: 30%; top: 52px; }
 .auth-panel { padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.78); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
+.nethub-auth-panel { display: grid; gap: 16px; }
+.nethub-auth-panel h2 { margin: 0; font-size: 30px; letter-spacing: -.035em; }
+.nethub-auth-note { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.8; }
 .auth-tabs { margin-bottom: 22px; padding: 4px; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); border-radius: 10px; background: rgba(59,64,95,.035); }
 .auth-tabs button { min-height: 38px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .auth-tabs button.is-active { color: var(--text); background: #ffffff; box-shadow: 0 2px 9px rgba(58,63,92,.08); }
