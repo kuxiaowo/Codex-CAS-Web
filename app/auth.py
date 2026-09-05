@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from app.config import settings
 from app.database import row_dict, transaction, utc_now
 
 SESSION_COOKIE = "cas_session"
+OIDC_FLOW_COOKIE = "cas_oidc_flow"
 LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout"
 RS256_JWT = JsonWebToken(["RS256"])
 
@@ -89,10 +91,24 @@ def start_oidc_login(return_path: str) -> RedirectResponse:
             "code_challenge_method": "S256",
         }
     )
-    return RedirectResponse(f"{settings.oidc_issuer}/oauth/authorize?{query}", status_code=302)
+    response = RedirectResponse(
+        f"{settings.oidc_issuer}/oauth/authorize?{query}", status_code=302
+    )
+    response.set_cookie(
+        OIDC_FLOW_COOKIE,
+        state,
+        max_age=settings.oidc_state_expire_seconds,
+        httponly=True,
+        secure=settings.oidc_cookie_secure,
+        samesite="lax",
+        path="/api/auth/callback",
+    )
+    return response
 
 
-def consume_login_state(state: str) -> dict:
+def consume_login_state(state: str, browser_state: str | None) -> dict:
+    if not browser_state or not hmac.compare_digest(state, browser_state):
+        raise HTTPException(status_code=400, detail="登录请求与当前浏览器不匹配")
     with transaction(immediate=True) as connection:
         item = row_dict(connection.execute(
             "SELECT * FROM oidc_login_states WHERE state_hash = ?", (_token_hash(state),)
@@ -163,8 +179,10 @@ def _decode_id_token(id_token: str, nonce: str, discovery: dict) -> dict:
     return data
 
 
-def complete_oidc_login(code: str, state: str) -> tuple[dict, str, str]:
-    login_state = consume_login_state(state)
+def complete_oidc_login(
+    code: str, state: str, browser_state: str | None
+) -> tuple[dict, str, str]:
+    login_state = consume_login_state(state, browser_state)
     discovery = _discovery()
     try:
         token_response = httpx.post(
@@ -242,6 +260,16 @@ def set_session_cookie(response: Response, token: str) -> None:
 
 def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, secure=settings.oidc_cookie_secure, samesite="lax")
+
+
+def clear_oidc_flow_cookie(response: Response) -> None:
+    response.delete_cookie(
+        OIDC_FLOW_COOKIE,
+        path="/api/auth/callback",
+        httponly=True,
+        secure=settings.oidc_cookie_secure,
+        samesite="lax",
+    )
 
 
 def current_user(request: Request) -> dict:

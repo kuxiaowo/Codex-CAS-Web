@@ -18,8 +18,10 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from app.auth import (
+    OIDC_FLOW_COOKIE,
     admin_user,
     browser_request_is_same_origin,
+    clear_oidc_flow_cookie,
     clear_session_cookie,
     complete_oidc_login,
     consume_login_state,
@@ -380,18 +382,21 @@ def health():
 
 @app.get("/api/auth/callback")
 def oidc_callback(
+    request: Request,
     code: str | None = Query(default=None, min_length=1, max_length=4096),
     state: str = Query(min_length=1, max_length=512),
     error: str | None = Query(default=None),
 ):
+    browser_state = request.cookies.get(OIDC_FLOW_COOKIE)
     if error:
-        consume_login_state(state)
+        consume_login_state(state, browser_state)
         raise HTTPException(status_code=401, detail="账号中心未完成授权")
     if not code:
         raise HTTPException(status_code=400, detail="账号中心回调缺少授权码")
-    _, return_path, session_token = complete_oidc_login(code, state)
+    _, return_path, session_token = complete_oidc_login(code, state, browser_state)
     response = RedirectResponse(return_path, status_code=303)
     set_session_cookie(response, session_token)
+    clear_oidc_flow_cookie(response)
     return response
 
 

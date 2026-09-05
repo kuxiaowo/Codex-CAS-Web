@@ -186,6 +186,27 @@ class OidcAuthTest(unittest.TestCase):
         self.assertEqual(self.client.post("/api/auth/login", json={}).status_code, 410)
         self.assertEqual(self.client.post("/api/auth/register", json={}).status_code, 410)
 
+    def test_callback_state_is_bound_to_the_browser_that_started_login(self) -> None:
+        request = self.begin_login()
+        from fastapi.testclient import TestClient
+
+        other_browser = TestClient(self.main.app)
+        rejected = other_browser.get(
+            f"/api/auth/callback?code=code&state={request['state']}",
+            follow_redirects=False,
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+        get_patch, post_patch = self.mock_oidc("bound-sub", "bound-sid")
+        with get_patch, post_patch:
+            accepted = self.client.get(
+                f"/api/auth/callback?code=code&state={request['state']}",
+                follow_redirects=False,
+            )
+        self.assertEqual(accepted.status_code, 303)
+        self.assertIn("cas_oidc_flow=", accepted.headers["set-cookie"])
+        self.assertIn("Max-Age=0", accepted.headers["set-cookie"])
+
     def test_error_callback_does_not_require_code_and_consumes_state(self) -> None:
         request = self.begin_login()
         result = self.client.get(
