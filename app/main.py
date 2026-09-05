@@ -641,6 +641,13 @@ def _write_gallery(connection: sqlite3.Connection, payload: GalleryInput, galler
     title = payload.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="图集标题不能为空")
+    duplicate_query = "SELECT id FROM galleries WHERE resource_dir = ? COLLATE NOCASE"
+    duplicate_params: tuple[object, ...] = (payload.resource_dir,)
+    if gallery_id is not None:
+        duplicate_query += " AND id != ?"
+        duplicate_params += (gallery_id,)
+    if connection.execute(duplicate_query, duplicate_params).fetchone():
+        raise HTTPException(status_code=409, detail="该资源文件夹已绑定其他图集")
     resource_dir = validate_gallery_directory(
         payload.resource_dir,
         require_images=payload.status == "published",
