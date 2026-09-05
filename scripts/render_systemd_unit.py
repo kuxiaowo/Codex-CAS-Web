@@ -15,8 +15,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory={quote_systemd(str(app_dir))}
-EnvironmentFile={quote_systemd(str(env_file))}
+WorkingDirectory={app_dir}
+EnvironmentFile={env_file}
 ExecStart={quote_systemd(str(python_bin))} -m app.main
 Restart=on-failure
 RestartSec=5
