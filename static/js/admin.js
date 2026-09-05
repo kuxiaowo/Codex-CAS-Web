@@ -42,11 +42,16 @@
     root.querySelector(selector)?.addEventListener(eventName, handler);
   }
 
-  function row(titleValue, metaValues, actions = []) {
+  function row(titleValue, metaValues, actions = [], avatarUrl = '') {
     const item = document.createElement('article');
     item.className = 'admin-row';
     const main = document.createElement('div');
     main.className = 'admin-row-main';
+    if (avatarUrl) {
+      const avatar = text('span', String(titleValue).trim().slice(0, 1).toUpperCase(), 'admin-user-avatar');
+      const image = document.createElement('img'); image.src = avatarUrl; image.alt = ''; image.addEventListener('error', () => image.remove(), { once: true });
+      avatar.append(image); main.append(avatar);
+    }
     main.append(text('strong', titleValue));
     const meta = document.createElement('div');
     meta.className = 'admin-row-meta';
@@ -370,6 +375,7 @@
           async () => { await Promise.all([loadUsers(), loadDashboard()]); },
         )),
       ],
+      user.avatarUrl,
     )));
   }
 
