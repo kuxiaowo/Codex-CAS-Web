@@ -119,6 +119,8 @@ svg { width: 1.2em; fill: none; stroke: currentColor; stroke-linecap: round; str
 .brand-mark span:nth-child(1) { transform: translateY(-7px); }
 .brand-mark span:nth-child(2) { width: 12px; }
 .brand-mark span:nth-child(3) { width: 7px; transform: translateY(7px); }
+.brand-logo { overflow: hidden; background: none; transform: none; }
+.brand-logo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .brand-copy { display: grid; gap: 3px; min-width: 0; }
 .brand-copy strong { font-size: 15px; letter-spacing: -.01em; }
 .brand-copy small { color: var(--quiet); font: 700 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .14em; }
@@ -183,8 +185,9 @@ svg { width: 1.2em; fill: none; stroke: currentColor; stroke-linecap: round; str
 .account-copy small { color: var(--quiet); font-size: 11px; }
 .account-action { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); }
 .account-action:hover { color: var(--text); background: rgba(67,71,101,.06); }
-.account-center-link { min-height: 36px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 9px; color: var(--violet); background: rgba(113,97,216,.06); font-size: 12px; font-weight: 800; text-decoration: none; }
-.account-center-link:hover { border-color: rgba(113,97,216,.35); background: rgba(113,97,216,.12); }
+.account-center-button { min-height: 38px; padding: 0 12px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--violet); border-radius: 9px; color: #fff; background: var(--violet); box-shadow: 0 8px 18px rgba(113,97,216,.22); font-size: 12px; font-weight: 800; text-decoration: none !important; transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
+.account-center-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.account-center-button:hover { color: #fff; filter: brightness(.96); transform: translateY(-1px); box-shadow: 0 10px 22px rgba(113,97,216,.3); }
 .mobile-menu, .sidebar-scrim { display: none; }
 
 .page { min-height: 100vh; margin-left: var(--sidebar-width); }
