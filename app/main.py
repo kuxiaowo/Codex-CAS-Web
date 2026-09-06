@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -28,6 +29,7 @@ from app.auth import (
     current_user,
     revoke_backchannel_sessions,
     revoke_current_session,
+    safe_return_path,
     set_session_cookie,
     start_oidc_login,
 )
@@ -378,9 +380,20 @@ def start_login(
     next: str = Query(default="/", max_length=1000),
     prompt: str | None = Query(default=None),
     screen_hint: str | None = Query(default=None),
+    popup: bool = Query(default=False),
 ):
+    return_path = safe_return_path(next)
+    if popup:
+        parts = urlsplit(return_path)
+        query = [
+            item
+            for item in parse_qsl(parts.query, keep_blank_values=True)
+            if item[0] != "auth_popup"
+        ]
+        query.append(("auth_popup", "1"))
+        return_path = urlunsplit(parts._replace(query=urlencode(query)))
     return start_oidc_login(
-        next,
+        return_path,
         prompt="none" if prompt == "none" else None,
         screen_hint="signup" if screen_hint == "signup" else None,
     )

@@ -93,8 +93,11 @@ class OidcAuthTest(unittest.TestCase):
             )
         return patch("app.auth.httpx.get", side_effect=get), patch("app.auth.httpx.post", side_effect=post)
 
-    def begin_login(self) -> dict:
-        result = self.client.get("/auth/login?next=/admin", follow_redirects=False)
+    def begin_login(self, *, popup: bool = False) -> dict:
+        popup_query = "&popup=1" if popup else ""
+        result = self.client.get(
+            f"/auth/login?next=/admin{popup_query}", follow_redirects=False
+        )
         self.assertEqual(result.status_code, 302)
         query = parse_qs(urlsplit(result.headers["location"]).query)
         self.assertEqual(query["code_challenge_method"], ["S256"])
@@ -114,6 +117,17 @@ class OidcAuthTest(unittest.TestCase):
         self.assertEqual(me.json()["data"]["authSub"], "reader-sub")
         self.assertEqual(me.json()["data"]["role"], "user")
         self.assertEqual(self.client.get("/api/admin/users").status_code, 403)
+
+    def test_popup_callback_returns_completion_marker(self) -> None:
+        request = self.begin_login(popup=True)
+        get_patch, post_patch = self.mock_oidc("popup-sub", "popup-sid")
+        with get_patch, post_patch:
+            result = self.client.get(
+                f"/api/auth/callback?code=code&state={request['state']}",
+                follow_redirects=False,
+            )
+        self.assertEqual(result.status_code, 303)
+        self.assertEqual(result.headers["location"], "/admin?auth_popup=1")
 
     def test_id_token_with_non_rs256_algorithm_is_rejected(self) -> None:
         request = self.begin_login()
