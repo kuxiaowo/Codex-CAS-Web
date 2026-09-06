@@ -14,7 +14,7 @@
     <p class="eyebrow">NETHUB ACCOUNT</p>
     <h2>注册或登录</h2>
     <p class="nethub-auth-note">本网站使用 NetHub 账号登录，请前往账号管理界面</p>
-    <a class="button button-primary button-wide" href="/auth/login?next={{ next }}">登录或注册 NetHub 账号后继续</a>
+    <a class="button button-primary button-wide" href="/auth/login?next={{ next | urlencode }}">登录或注册 NetHub 账号后继续</a>
   </section>
 </div>
 {% endblock %}

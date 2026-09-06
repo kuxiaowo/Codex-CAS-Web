@@ -365,6 +365,13 @@ def gallery_detail(request: Request, gallery_id: int):
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = Query(default="/", max_length=1000)):
+    try:
+        current_user(request)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+    else:
+        return RedirectResponse(safe_return_path(next), status_code=303)
     with transaction() as connection:
         context = {
             "request": request,

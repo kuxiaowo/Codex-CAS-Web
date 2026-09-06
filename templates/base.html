@@ -65,7 +65,12 @@
           <strong data-account-name>访客</strong>
           <small data-account-role>登录后参与留言</small>
         </span>
-        <a href="/auth/login?next={{ request.url.path }}" class="account-action" data-account-action aria-label="登录">
+        {% if request.url.path == '/login' and next is defined %}
+          {% set login_return_path = next %}
+        {% else %}
+          {% set login_return_path = request.url.path ~ (('?' ~ request.url.query) if request.url.query else '') %}
+        {% endif %}
+        <a href="/auth/login?next={{ login_return_path | urlencode }}" class="account-action" data-account-action aria-label="登录">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h6v16h-6"/></svg>
         </a>
       </div>
@@ -96,7 +101,7 @@
   </footer>
 
   <div class="toast-region" aria-live="polite" aria-atomic="true" data-toast-region></div>
-  <script src="/static/js/app.js?v=central-avatar1" defer></script>
+  <script src="/static/js/app.js?v=auth-return1" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -93,9 +93,9 @@ class OidcAuthTest(unittest.TestCase):
             )
         return patch("app.auth.httpx.get", side_effect=get), patch("app.auth.httpx.post", side_effect=post)
 
-    def begin_login(self) -> dict:
+    def begin_login(self, next_path: str = "/admin") -> dict:
         result = self.client.get(
-            "/auth/login?next=/admin", follow_redirects=False
+            "/auth/login", params={"next": next_path}, follow_redirects=False
         )
         self.assertEqual(result.status_code, 302)
         query = parse_qs(urlsplit(result.headers["location"]).query)
@@ -118,7 +118,7 @@ class OidcAuthTest(unittest.TestCase):
         self.assertEqual(self.client.get("/api/admin/users").status_code, 403)
 
     def test_page_callback_returns_requested_page(self) -> None:
-        request = self.begin_login()
+        request = self.begin_login("/galleries/1?view=grid#comments")
         get_patch, post_patch = self.mock_oidc("page-sub", "page-sid")
         with get_patch, post_patch:
             result = self.client.get(
@@ -126,7 +126,7 @@ class OidcAuthTest(unittest.TestCase):
                 follow_redirects=False,
             )
         self.assertEqual(result.status_code, 303)
-        self.assertEqual(result.headers["location"], "/admin")
+        self.assertEqual(result.headers["location"], "/galleries/1?view=grid#comments")
 
     def test_id_token_with_non_rs256_algorithm_is_rejected(self) -> None:
         request = self.begin_login()
