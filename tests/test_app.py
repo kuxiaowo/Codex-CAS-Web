@@ -135,9 +135,20 @@ class AppTest(unittest.TestCase):
             "data-picker-current", "data-settings-form", "data-export",
         ):
             self.assertIn(control, response.text)
-        self.assertIn("/static/js/admin.js?v=central-avatar1", response.text)
+        self.assertIn("/static/js/admin.js?v=auth-return2", response.text)
         self.assertGreaterEqual(response.text.count('type="button" value="cancel"'), 2)
         self.assertGreaterEqual(response.text.count("data-dialog-close"), 2)
+
+        admin_js = (self.main.STATIC_DIR / "js" / "admin.js").read_text(encoding="utf-8")
+        self.assertIn(
+            "`${window.location.pathname}${window.location.search}${window.location.hash}`",
+            admin_js,
+        )
+        self.assertIn(
+            "`/login?next=${encodeURIComponent(returnPath)}`",
+            admin_js,
+        )
+        self.assertNotIn("window.location.replace('/login?next=/admin')", admin_js)
 
     def test_admin_member_list_excludes_unbound_development_accounts(self) -> None:
         with self.database.transaction() as connection:
