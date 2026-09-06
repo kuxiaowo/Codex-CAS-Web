@@ -614,7 +614,13 @@
     } catch (error) {
       root.querySelector('[data-admin-gate] h2').textContent = '无法进入管理后台';
       root.querySelector('[data-admin-gate] p').textContent = error.message;
-      if (error.status === 401) window.setTimeout(() => window.location.replace('/login?next=/admin'), 1000);
+      if (error.status === 401) {
+        const returnPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.setTimeout(
+          () => window.location.replace(`/login?next=${encodeURIComponent(returnPath)}`),
+          1000,
+        );
+      }
     }
   }
 
