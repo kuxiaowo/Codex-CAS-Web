@@ -3,6 +3,10 @@
 
   let account = null;
 
+  function currentReturnPath() {
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  }
+
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
     if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
@@ -116,11 +120,11 @@
     }
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (!account) { window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`); return; }
+      if (!account) { window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`); return; }
       const content = form.elements.content.value.trim(); if (!content) return;
       const button = form.querySelector('button[type="submit"]'); button.disabled = true;
       try { await api(`/api/galleries/${galleryId}/comments`, { method: 'POST', body: JSON.stringify({ content }) }); form.reset(); toast('留言已发布'); await load(); }
-      catch (error) { if (error.status === 401) window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`); else toast(error.message, true); }
+      catch (error) { if (error.status === 401) window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`); else toast(error.message, true); }
       finally { button.disabled = false; }
     });
     await load();

@@ -110,11 +110,22 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.client.get("/api/health").json(), {"status": "ok"})
 
     def test_login_action_uses_same_page_accounts_flow(self) -> None:
-        response = self.client.get("/login?next=/admin")
+        from fastapi.testclient import TestClient
+
+        with TestClient(self.main.app) as anonymous_client:
+            response = anonymous_client.get("/login?next=/admin%3Fsection%3Dusers")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('href="/auth/login?next=/admin"', response.text)
-        self.assertNotIn('href="/auth/login?next=/admin&popup=1"', response.text)
+        self.assertEqual(
+            response.text.count('href="/auth/login?next=/admin%3Fsection%3Dusers"'), 2
+        )
+        self.assertNotIn('href="/auth/login?next=/login"', response.text)
+
+    def test_authenticated_login_page_returns_to_requested_page(self) -> None:
+        response = self.client.get("/login?next=/admin", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin")
 
     def test_admin_page_contains_initialized_controls_and_versioned_script(self) -> None:
         response = self.client.get("/admin")
