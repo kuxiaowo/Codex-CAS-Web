@@ -18,7 +18,6 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from app.auth import (
-    OIDC_FLOW_COOKIE,
     admin_user,
     browser_request_is_same_origin,
     clear_oidc_flow_cookie,
@@ -26,6 +25,7 @@ from app.auth import (
     complete_oidc_login,
     consume_login_state,
     current_user,
+    oidc_flow_cookie_name,
     revoke_backchannel_sessions,
     revoke_current_session,
     safe_return_path,
@@ -377,6 +377,7 @@ def login_page(request: Request, next: str = Query(default="/", max_length=1000)
             "request": request,
             "site": _site_context(connection),
             "next": next,
+            "auth_error": None,
         }
     return templates.TemplateResponse(request, "login.html", context)
 
@@ -417,25 +418,53 @@ def health():
 @app.get("/api/auth/callback")
 def oidc_callback(
     request: Request,
-    code: str | None = Query(default=None, min_length=1, max_length=4096),
-    state: str = Query(min_length=1, max_length=512),
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
     error: str | None = Query(default=None),
 ):
-    browser_state = request.cookies.get(OIDC_FLOW_COOKIE)
-    if error:
-        login_state = consume_login_state(state, browser_state)
-        destination = request.url_for("login_page").include_query_params(
-            next=login_state["return_path"]
+    if not state or len(state) > 512:
+        detail = "登录请求缺少有效状态，请重新登录"
+        with transaction() as connection:
+            context = {
+                "request": request,
+                "site": _site_context(connection),
+                "next": "/",
+                "auth_error": detail,
+            }
+        return templates.TemplateResponse(
+            request, "login.html", context, status_code=400
         )
-        response = RedirectResponse(destination, status_code=303)
-        clear_oidc_flow_cookie(response)
+
+    browser_state = request.cookies.get(oidc_flow_cookie_name(state))
+    try:
+        if error:
+            login_state = consume_login_state(state, browser_state)
+            destination = request.url_for("login_page").include_query_params(
+                next=login_state["return_path"]
+            )
+            response = RedirectResponse(destination, status_code=303)
+            clear_oidc_flow_cookie(response, state)
+            return response
+        if not code or len(code) > 4096:
+            raise HTTPException(status_code=400, detail="账号中心回调缺少有效授权码")
+        _, return_path, session_token = complete_oidc_login(code, state, browser_state)
+    except HTTPException as exc:
+        with transaction() as connection:
+            context = {
+                "request": request,
+                "site": _site_context(connection),
+                "next": "/",
+                "auth_error": str(exc.detail),
+            }
+        response = templates.TemplateResponse(
+            request, "login.html", context, status_code=exc.status_code
+        )
+        clear_oidc_flow_cookie(response, state)
         return response
-    if not code:
-        raise HTTPException(status_code=400, detail="账号中心回调缺少授权码")
-    _, return_path, session_token = complete_oidc_login(code, state, browser_state)
+
     response = RedirectResponse(return_path, status_code=303)
     set_session_cookie(response, session_token)
-    clear_oidc_flow_cookie(response)
+    clear_oidc_flow_cookie(response, state)
     return response
 
 

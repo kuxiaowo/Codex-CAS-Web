@@ -32,6 +32,11 @@ def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
+def oidc_flow_cookie_name(state: str) -> str:
+    """Give each pending authorization its own browser-bound cookie."""
+    return f"{OIDC_FLOW_COOKIE}_{_token_hash(state)[:16]}"
+
+
 def _future(seconds: int) -> str:
     return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat(timespec="seconds")
 
@@ -103,7 +108,7 @@ def start_oidc_login(
         f"{settings.oidc_issuer}/oauth/authorize?{query}", status_code=302
     )
     response.set_cookie(
-        OIDC_FLOW_COOKIE,
+        oidc_flow_cookie_name(state),
         state,
         max_age=settings.oidc_state_expire_seconds,
         httponly=True,
@@ -275,9 +280,9 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, secure=settings.oidc_cookie_secure, samesite="lax")
 
 
-def clear_oidc_flow_cookie(response: Response) -> None:
+def clear_oidc_flow_cookie(response: Response, state: str) -> None:
     response.delete_cookie(
-        OIDC_FLOW_COOKIE,
+        oidc_flow_cookie_name(state),
         path="/api/auth/callback",
         httponly=True,
         secure=settings.oidc_cookie_secure,

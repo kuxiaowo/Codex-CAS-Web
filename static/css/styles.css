@@ -324,6 +324,7 @@ input:focus, textarea:focus, select:focus { border-color: rgba(113,97,216,.52); 
 .auth-panel { padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.78); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
 .nethub-auth-panel { display: grid; gap: 16px; }
 .nethub-auth-panel h2 { margin: 0; font-size: 30px; letter-spacing: -.035em; }
+.nethub-auth-error { margin: 0; padding: 10px 12px; border: 1px solid #fecaca; border-radius: 9px; color: #991b1b; background: #fef2f2; font-size: 13px; line-height: 1.6; }
 .nethub-auth-note { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.8; }
 .auth-tabs { margin-bottom: 22px; padding: 4px; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); border-radius: 10px; background: rgba(59,64,95,.035); }
 .auth-tabs button { min-height: 38px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
