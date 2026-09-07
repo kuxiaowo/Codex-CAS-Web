@@ -58,13 +58,25 @@ class OidcAuthTest(unittest.TestCase):
         key = JsonWebKey.import_key(self.key, {"kty": "RSA", "kid": "test-key"})
         return jwt.encode({"alg": "RS256", "kid": "test-key"}, claims, key).decode()
 
-    def mock_oidc(self, sub: str = "reader-sub", sid: str = "central-sid"):
+    def mock_oidc(
+        self,
+        sub: str = "reader-sub",
+        sid: str = "central-sid",
+        state_value: str | None = None,
+    ):
         connection = self.database.connect()
         try:
-            state = connection.execute(
-                """SELECT nonce, code_verifier FROM oidc_login_states
-                   ORDER BY id DESC LIMIT 1"""
-            ).fetchone()
+            if state_value is None:
+                state = connection.execute(
+                    """SELECT nonce, code_verifier FROM oidc_login_states
+                       ORDER BY id DESC LIMIT 1"""
+                ).fetchone()
+            else:
+                state = connection.execute(
+                    """SELECT nonce, code_verifier FROM oidc_login_states
+                       WHERE state_hash = ?""",
+                    (self.auth._token_hash(state_value),),
+                ).fetchone()
         finally:
             connection.close()
 
@@ -217,8 +229,35 @@ class OidcAuthTest(unittest.TestCase):
                 follow_redirects=False,
             )
         self.assertEqual(accepted.status_code, 303)
-        self.assertIn("cas_oidc_flow=", accepted.headers["set-cookie"])
+        cookie_name = self.auth.oidc_flow_cookie_name(request["state"])
+        self.assertIn(f"{cookie_name}=", accepted.headers["set-cookie"])
         self.assertIn("Max-Age=0", accepted.headers["set-cookie"])
+
+    def test_concurrent_login_states_keep_independent_browser_bindings(self) -> None:
+        first = self.begin_login("/galleries/1")
+        second = self.begin_login("/admin")
+
+        get_patch, post_patch = self.mock_oidc(
+            "concurrent-sub", "first-sid", first["state"]
+        )
+        with get_patch, post_patch:
+            first_result = self.client.get(
+                f"/api/auth/callback?code=first&state={first['state']}",
+                follow_redirects=False,
+            )
+        self.assertEqual(first_result.status_code, 303)
+        self.assertEqual(first_result.headers["location"], "/galleries/1")
+
+        get_patch, post_patch = self.mock_oidc(
+            "concurrent-sub", "second-sid", second["state"]
+        )
+        with get_patch, post_patch:
+            second_result = self.client.get(
+                f"/api/auth/callback?code=second&state={second['state']}",
+                follow_redirects=False,
+            )
+        self.assertEqual(second_result.status_code, 303)
+        self.assertEqual(second_result.headers["location"], "/admin")
 
     def test_error_callback_does_not_require_code_and_consumes_state(self) -> None:
         request = self.begin_login()
@@ -232,6 +271,8 @@ class OidcAuthTest(unittest.TestCase):
             f"/api/auth/callback?error=access_denied&state={request['state']}"
         )
         self.assertEqual(replay.status_code, 400)
+        self.assertIn("text/html", replay.headers["content-type"])
+        self.assertIn("登录请求与当前浏览器不匹配", replay.text)
 
     def test_cross_origin_mutation_is_rejected(self) -> None:
         cross_site = self.client.post(
