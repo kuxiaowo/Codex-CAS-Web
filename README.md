@@ -6,14 +6,15 @@
 
 - FastAPI + Jinja2：页面和 JSON API
 - SQLite：账号、栏目、图集目录、公告和留言
-- Pillow：生成并定时同步 WebP 缩略图
+- Pillow：仅在上传时校验图片并生成 WebP 缩略图
+- Cloudflare R2：通过私有 HMAC Worker 保存图集原图、缩略图和目录摘要
 - 原生 HTML / CSS / JavaScript：无需 Node 构建
 
 ```text
 app/                 FastAPI、认证、数据库、资源扫描与缩略图
 templates/           Jinja2 页面模板
 static/              前端样式、脚本和站点静态资源
-resources/           用户图片资源（内容不纳入 Git）
+resources/           仅供 development/test 显式本地存储及迁移源使用
 tests/               接口、迁移、上传和缩略图测试
 ```
 
@@ -29,7 +30,7 @@ Copy-Item .env.example .env
 python -m app.main
 ```
 
-默认地址为 `http://127.0.0.1:3300/`，管理后台为 `/admin`。测试或临时预览必须通过 `APP_PORT` 使用其他端口，例如 `3311`。
+默认地址为 `http://127.0.0.1:3300/`，管理后台为 `/admin`。测试或临时预览必须通过 `APP_PORT` 使用其他端口，例如 `3311`。生产环境必须配置 `MEDIA_STORAGE_BACKEND=r2`、媒体网关地址和独立的 `MEDIA_HMAC_SECRET`；`local` 只允许在 `APP_ENV=development|test` 时显式启用。
 回环地址的本地 OIDC 回调可以使用 HTTP；非回环地址必须使用 HTTPS。
 
 Linux 初始化脚本支持 `--no-systemd` 和 `--no-start`，重复执行会复用 Conda 环境、`.env`、数据库和现有 systemd 服务配置。运行脚本前必须先填写 `OIDC_CLIENT_SECRET`。
@@ -51,12 +52,12 @@ python -m app.cli register-client \
 ## 图集与资源文件
 
 - 图集只保存简短标题、栏目、资源目录、发布状态和精选状态。
-- 图片放在项目根目录 `resources/` 的子文件夹中；每个子文件夹最多绑定一个图集。
-- 支持 JPG/JPEG、PNG、WebP、GIF。图库只扫描所选目录当前层，并按文件名自然排序。
+- 图集图片由后台上传至 R2；每个虚拟资源文件夹最多绑定一个图集。页面首批读取 30 张，后续通过游标懒加载。
+- 支持 JPG/JPEG、PNG、WebP、GIF。图库只列出所选虚拟目录当前层，并按文件名自然排序。
 - 首页封面和详情页只加载压缩后的 WebP 缩略图；用户点击图片打开灯箱时才加载原图。
-- 缩略图写入源图旁的 `.thumbs/`。服务启动时会先全量同步，运行中默认每 5 分钟同步一次；新增或更新源图会生成/重建缩略图，删除源图后会清理对应的孤儿缩略图。
+- 原图写入 `galleries/`，缩略图写入 `thumbnails/`，目录摘要写入 `manifests/`。缩略图只在受控上传时生成；服务启动和运行期间不扫描媒体目录。
 - 新建图集、上传单图或上传文件夹时会立即生成首批缩略图，不必等待定时任务。
-- 后台可浏览目录、新建文件夹、上传单图或上传整个文件夹；不提供删除与重命名，删除图集也不会删除实体图片。
+- 后台可浏览目录、新建文件夹、上传单图或上传整个文件夹，并可删除单张图片；不提供文件夹删除与重命名，删除图集也不会删除实体图片。
 - 发布图集前，目录必须存在并包含至少一张可识别图片；草稿允许使用空目录。
 
 上传大小和缩略图参数可在 `.env` 调整：
@@ -67,14 +68,17 @@ THUMBNAIL_MAX_WIDTH=640
 THUMBNAIL_MAX_HEIGHT=640
 THUMBNAIL_WEBP_QUALITY=82
 THUMBNAIL_WEBP_METHOD=6
-THUMBNAIL_SYNC_MINUTES=5
+MEDIA_STORAGE_BACKEND=r2
+MEDIA_GATEWAY_URL=https://codex-media.nethub.wiki
 ```
 
 ## 数据迁移与导入导出
 
 数据库结构版本为 v4。旧 v1 数据库首次启动时会删除旧笔记及其留言，保留栏目、公告、站点设置和访问限制，再建立图集表与新的留言关联。接入统一账号时会清除旧密码凭据并停用未绑定中央身份的开发账号；这些历史行仅用于保留业务外键，不会出现在本站成员列表中。
 
-JSON 导入导出格式为 v2，只包含资源相对路径，不包含图片文件。迁移站点时需要另外复制 `resources/`。v1 笔记数据包不会被兼容导入。
+JSON 导入导出格式为 v2，只包含资源相对路径，不包含图片文件。旧 `resources/` 可先用 `python scripts/migrate_media_to_r2.py` 做本地 dry-run；只有显式添加 `--execute` 才会调用网关。迁移默认不覆盖、不删除对象，并使用断点清单、SHA-256、multipart 与最终流式回读校验。v1 笔记数据包不会被兼容导入。
+
+媒体 Worker 的部署、Secret 和冻结协议见 `cloudflare/nethub-codex-media-gateway/README.md`。应用管理接口负责登录、管理员权限、同源 CSRF、扩展名、图片内容与大小校验；浏览器不会接触内部 HMAC Secret。
 
 ## 测试
 

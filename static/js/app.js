@@ -133,9 +133,32 @@
   function initGalleryViewer() {
     const page = document.querySelector('[data-gallery-page]'); const dialog = document.querySelector('[data-gallery-lightbox]');
     if (!page || !dialog) return;
-    const buttons = [...page.querySelectorAll('[data-gallery-image]')]; const image = dialog.querySelector('img'); const count = dialog.querySelector('[data-lightbox-count]'); let activeIndex = 0; let touchStartX = null;
+    const list = page.querySelector('.gallery-reading-list'); const sentinel = page.querySelector('[data-gallery-load-sentinel]');
+    const buttons = [...page.querySelectorAll('[data-gallery-image]')]; const image = dialog.querySelector('img'); const count = dialog.querySelector('[data-lightbox-count]'); let activeIndex = 0; let touchStartX = null; let loading = false;
     const show = (index) => { activeIndex = (index + buttons.length) % buttons.length; const source = buttons[activeIndex].querySelector('img'); image.src = source.dataset.originalSrc; image.alt = source.alt; count.textContent = `${activeIndex + 1} / ${buttons.length}`; };
-    buttons.forEach((button, index) => button.addEventListener('click', () => { show(index); dialog.showModal(); }));
+    const bind = (button) => button.addEventListener('click', () => { show(buttons.indexOf(button)); dialog.showModal(); });
+    buttons.forEach(bind);
+    const appendImage = (item) => {
+      const index = buttons.length; const figure = document.createElement('figure'); figure.className = 'gallery-page';
+      const button = document.createElement('button'); button.type = 'button'; button.dataset.galleryImage = String(index); button.setAttribute('aria-label', `放大第 ${index + 1} 张图片`);
+      const preview = document.createElement('img'); preview.src = item.thumbSrc; preview.dataset.originalSrc = item.src; preview.alt = `${document.querySelector('.gallery-reading-header h1')?.textContent || '图集'}，第 ${index + 1} 张`; preview.loading = 'lazy'; preview.decoding = 'async';
+      const caption = document.createElement('figcaption'); caption.textContent = `${String(index + 1).padStart(2, '0')} / ${String(page.dataset.imageCount || buttons.length + 1).padStart(2, '0')}`;
+      button.append(preview); figure.append(button, caption); list.append(figure); buttons.push(button); bind(button);
+    };
+    const loadMore = async () => {
+      if (loading || page.dataset.hasMore !== 'true') return;
+      loading = true;
+      try {
+        const query = new URLSearchParams({ limit: '30' });
+        if (page.dataset.nextCursor) query.set('cursor', page.dataset.nextCursor);
+        const result = await api(`/api/galleries/${page.dataset.galleryId}/images?${query}`);
+        result.data.forEach(appendImage); page.dataset.nextCursor = result.nextCursor || ''; page.dataset.hasMore = String(result.hasMore); sentinel.hidden = !result.hasMore;
+      } catch (error) { sentinel.textContent = '更多图片加载失败，滚动后重试'; toast(error.message, true); }
+      finally { loading = false; }
+    };
+    if (sentinel && 'IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) loadMore(); }, { rootMargin: '600px' }); observer.observe(sentinel);
+    } else if (sentinel) { sentinel.addEventListener('click', loadMore); }
     dialog.querySelector('[data-lightbox-close]').addEventListener('click', () => dialog.close()); dialog.querySelector('[data-lightbox-prev]').addEventListener('click', () => show(activeIndex - 1)); dialog.querySelector('[data-lightbox-next]').addEventListener('click', () => show(activeIndex + 1));
     dialog.addEventListener('keydown', (event) => { if (event.key === 'ArrowLeft') show(activeIndex - 1); if (event.key === 'ArrowRight') show(activeIndex + 1); });
     dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }); dialog.addEventListener('close', () => image.removeAttribute('src'));

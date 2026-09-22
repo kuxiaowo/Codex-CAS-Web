@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-import shutil
 import sqlite3
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Annotated
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -34,23 +33,22 @@ from app.auth import (
 )
 from app.config import PROJECT_ROOT, settings, validate_runtime_settings
 from app.database import connect, get_setting, initialize_database, transaction, utc_now
-from app.gallery_assets import (
-    IMAGE_EXTENSIONS,
-    RESOURCE_DIR,
-    ensure_thumbnail,
-    ensure_resource_root,
+from app.gallery_assets import IMAGE_EXTENSIONS, RESOURCE_DIR, normalize_folder_upload_path, normalize_resource_path, validate_entry_name
+from app.media_library import (
+    create_folder,
+    create_thumbnail,
+    delete_image,
     folder_url,
-    format_file_item,
-    image_files,
-    is_valid_image,
-    normalize_folder_upload_path,
-    resolve_resource_path,
-    scan_gallery,
-    sync_all_thumbnails,
-    sync_gallery_thumbnails,
-    validate_entry_name,
+    gallery_images,
+    gallery_summary,
+    list_directory,
+    protected_download_url,
+    upload_prepared_batch,
+    upload_prepared_image,
     validate_gallery_directory,
+    validate_image_file,
 )
+from app.media_storage import MediaStorageError, close_media_storage
 from app.schemas import (
     AnnouncementInput,
     CategoryInput,
@@ -62,46 +60,16 @@ from app.schemas import (
 
 STATIC_DIR = PROJECT_ROOT / "static"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
-logger = logging.getLogger(__name__)
-
-
-async def _thumbnail_sync_loop() -> None:
-    interval_seconds = settings.thumbnail_sync_minutes * 60
-    while interval_seconds > 0:
-        await asyncio.sleep(interval_seconds)
-        try:
-            result = await asyncio.to_thread(sync_all_thumbnails)
-            logger.info(
-                "缩略图定时同步完成：扫描 %s，生成 %s，已有 %s，清理 %s，失败 %s",
-                result.scanned, result.generated, result.current, result.removed, result.failed,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("缩略图定时同步失败")
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     validate_runtime_settings()
-    ensure_resource_root()
+    if settings.media_storage_backend == "local":
+        RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
     initialize_database()
-    result = await asyncio.to_thread(sync_all_thumbnails)
-    logger.info(
-        "缩略图启动同步完成：扫描 %s，生成 %s，已有 %s，清理 %s，失败 %s",
-        result.scanned, result.generated, result.current, result.removed, result.failed,
-    )
-    sync_task = (
-        asyncio.create_task(_thumbnail_sync_loop(), name="thumbnail-sync")
-        if settings.thumbnail_sync_minutes > 0 else None
-    )
     try:
         yield
     finally:
-        if sync_task is not None:
-            sync_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await sync_task
+        close_media_storage()
 
 
 app = FastAPI(
@@ -111,8 +79,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/resources", StaticFiles(directory=RESOURCE_DIR), name="resources")
+if settings.media_storage_backend == "local":
+    app.mount("/resources", StaticFiles(directory=RESOURCE_DIR), name="resources")
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
+
+
+@app.exception_handler(MediaStorageError)
+async def media_storage_error_handler(_: Request, exc: MediaStorageError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
 @app.middleware("http")
@@ -178,11 +152,10 @@ def _category_dict(row: sqlite3.Row) -> dict:
 def _gallery_dict(row: sqlite3.Row, *, include_images: bool = False) -> dict:
     data = dict(row)
     try:
-        directory, _ = resolve_resource_path(data["resource_dir"], allow_root=False)
-        count = len(image_files(directory))
-    except HTTPException:
-        count = 0
-    cover = scan_gallery(data["resource_dir"], cover_only=True)
+        summary = gallery_summary(data["resource_dir"])
+    except (HTTPException, MediaStorageError, ValueError):
+        summary = {"imageCount": 0, "cover": None}
+    cover = summary["cover"]
     result = {
         "id": data["id"],
         "categoryId": data["category_id"],
@@ -195,12 +168,15 @@ def _gallery_dict(row: sqlite3.Row, *, include_images: bool = False) -> dict:
         "views": data["views"],
         "createdAt": data["created_at"],
         "updatedAt": data["updated_at"],
-        "imageCount": count,
-        "coverSrc": cover[0]["src"] if cover else None,
-        "coverThumbSrc": cover[0]["thumbSrc"] if cover else None,
+        "imageCount": summary["imageCount"],
+        "coverSrc": cover["src"] if cover else None,
+        "coverThumbSrc": cover["thumbSrc"] if cover else None,
     }
     if include_images:
-        result["images"] = scan_gallery(data["resource_dir"])
+        page = gallery_images(data["resource_dir"], limit=30)
+        result["images"] = page.images
+        result["imagesNextCursor"] = page.next_cursor
+        result["imagesHasMore"] = page.has_more
     return result
 
 
@@ -361,6 +337,37 @@ def gallery_detail(request: Request, gallery_id: int):
             "gallery": gallery,
         }
     return templates.TemplateResponse(request, "gallery.html", context)
+
+
+@app.get("/api/galleries/{gallery_id}/images")
+def gallery_image_page(
+    gallery_id: int,
+    cursor: str | None = Query(default=None, max_length=2048),
+    limit: int = Query(default=30, ge=1, le=100),
+):
+    connection = connect()
+    try:
+        row = connection.execute(
+            """
+            SELECT g.resource_dir
+            FROM galleries g JOIN categories c ON c.id = g.category_id
+            WHERE g.id = ? AND g.status = 'published' AND c.is_active = 1
+            """,
+            (gallery_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="图集不存在")
+    try:
+        page = gallery_images(row["resource_dir"], cursor=cursor, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="图片分页游标不合法") from exc
+    return {
+        "data": page.images,
+        "nextCursor": page.next_cursor,
+        "hasMore": page.has_more,
+    }
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -720,9 +727,6 @@ def _write_gallery(connection: sqlite3.Connection, payload: GalleryInput, galler
         payload.resource_dir,
         require_images=payload.status == "published",
     )
-    thumbnail_result = sync_gallery_thumbnails(resource_dir)
-    if thumbnail_result.failed:
-        raise HTTPException(status_code=500, detail="图集缩略图生成失败，请检查资源文件")
     now = utc_now()
     values = (
         payload.category_id, title, resource_dir,
@@ -924,20 +928,10 @@ def admin_file_tree(
     path: str = Query(default="", max_length=500),
     _: dict = Depends(admin_user),
 ):
-    target, relative = resolve_resource_path(path, must_exist=True)
-    if not target.is_dir():
-        raise HTTPException(status_code=422, detail="只能浏览资源目录")
-    items = []
-    for item in target.iterdir():
-        if item.name == ".thumbs":
-            continue
-        if item.is_file() and item.suffix.lower() not in IMAGE_EXTENSIONS:
-            continue
-        try:
-            items.append(format_file_item(item))
-        except (ValueError, OSError):
-            continue
-    items.sort(key=lambda item: (item["type"] != "folder", item["name"].casefold()))
+    relative = normalize_resource_path(path)
+    if relative:
+        validate_gallery_directory(relative)
+    items = list_directory(relative)
     return {"path": relative, "url": folder_url(relative), "data": items}
 
 
@@ -946,18 +940,24 @@ def admin_create_folder(
     payload: dict = Body(),
     _: dict = Depends(admin_user),
 ):
-    parent, _ = resolve_resource_path(payload.get("parentPath"), must_exist=True)
-    if not parent.is_dir():
-        raise HTTPException(status_code=422, detail="目标路径必须是目录")
-    name = validate_entry_name(payload.get("name"), "文件夹名称")
-    target = parent / name
-    if target.exists():
-        raise HTTPException(status_code=409, detail="同名文件或文件夹已存在")
-    try:
-        target.mkdir()
-    except FileExistsError as exc:
-        raise HTTPException(status_code=409, detail="同名文件或文件夹已存在") from exc
-    return {"data": format_file_item(target)}
+    parent = normalize_resource_path(payload.get("parentPath"))
+    if parent:
+        validate_gallery_directory(parent)
+    return {"data": create_folder(parent, payload.get("name"))}
+
+
+async def _save_upload(upload: UploadFile, target: Path, *, display_name: str) -> int:
+    size = 0
+    with target.open("xb") as output:
+        while chunk := await upload.read(1024 * 1024):
+            size += len(chunk)
+            if size > settings.upload_max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"文件超过上传大小限制：{display_name}",
+                )
+            output.write(chunk)
+    return size
 
 
 @app.post("/api/admin/uploads", status_code=201)
@@ -969,30 +969,18 @@ async def admin_upload_file(
     name = validate_entry_name(file.filename, "文件名")
     if Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
         raise HTTPException(status_code=422, detail="只允许上传 JPG、PNG、WebP 或 GIF 图片")
-    target_dir, _ = resolve_resource_path(target_path, must_exist=True)
-    if not target_dir.is_dir():
-        raise HTTPException(status_code=422, detail="上传目标必须是目录")
-    target = target_dir / name
-    if target.exists():
-        raise HTTPException(status_code=409, detail="同名文件已存在")
-    size = 0
-    try:
-        with target.open("xb") as output:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > settings.upload_max_bytes:
-                    raise HTTPException(status_code=413, detail="文件超过上传大小限制")
-                output.write(chunk)
-    except Exception:
-        target.unlink(missing_ok=True)
-        raise
-    if not is_valid_image(target):
-        target.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail="文件内容不是可识别的图片")
-    if await asyncio.to_thread(ensure_thumbnail, target) is None:
-        target.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail="图片缩略图生成失败")
-    return {"data": format_file_item(target)}
+    target_path = normalize_resource_path(target_path)
+    if target_path:
+        await asyncio.to_thread(validate_gallery_directory, target_path)
+    relative = f"{target_path}/{name}" if target_path else name
+    with TemporaryDirectory(prefix="cas-upload-") as temporary_dir:
+        source = Path(temporary_dir) / "source"
+        thumbnail = Path(temporary_dir) / "thumbnail.webp"
+        await _save_upload(file, source, display_name=name)
+        await asyncio.to_thread(validate_image_file, source, name)
+        await asyncio.to_thread(create_thumbnail, source, thumbnail)
+        item = await asyncio.to_thread(upload_prepared_image, relative, source, thumbnail)
+    return {"data": {**item, "path": relative, "type": "file", "url": item["src"]}}
 
 
 @app.post("/api/admin/files/folder-upload", status_code=201)
@@ -1016,56 +1004,59 @@ async def admin_upload_folder(
     roots = {path.parts[0] for path in paths}
     if len(roots) != 1:
         raise HTTPException(status_code=422, detail="一次只能上传一个文件夹")
-    target_dir, _ = resolve_resource_path(target_path, must_exist=True)
-    if not target_dir.is_dir():
-        raise HTTPException(status_code=422, detail="上传目标必须是目录")
-    uploaded_root = target_dir / roots.pop()
-    if uploaded_root.exists():
+    target_path = normalize_resource_path(target_path)
+    if target_path:
+        await asyncio.to_thread(validate_gallery_directory, target_path)
+    root_name = roots.pop()
+    uploaded_root = f"{target_path}/{root_name}" if target_path else root_name
+    try:
+        await asyncio.to_thread(validate_gallery_directory, uploaded_root)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+    else:
         raise HTTPException(status_code=409, detail="同名文件夹已存在")
     total_size = 0
-    created = False
-    try:
-        uploaded_root.mkdir()
-        created = True
-        for upload, relative in zip(files, paths):
-            target = target_dir.joinpath(*relative.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            size = 0
-            with target.open("xb") as output:
-                while chunk := await upload.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > settings.upload_max_bytes:
-                        raise HTTPException(
-                            status_code=413,
-                            detail=f"文件超过上传大小限制：{relative.as_posix()}",
-                        )
-                    output.write(chunk)
-            if not is_valid_image(target):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"文件内容不是可识别的图片：{relative.as_posix()}",
-                )
-            if await asyncio.to_thread(ensure_thumbnail, target) is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"图片缩略图生成失败：{relative.as_posix()}",
-                )
+    prepared: list[tuple[str, Path, Path]] = []
+    with TemporaryDirectory(prefix="cas-folder-upload-") as temporary_dir:
+        temporary_root = Path(temporary_dir)
+        for index, (upload, relative) in enumerate(zip(files, paths)):
+            source = temporary_root / f"source-{index}"
+            thumbnail = temporary_root / f"thumbnail-{index}.webp"
+            size = await _save_upload(upload, source, display_name=relative.as_posix())
+            try:
+                await asyncio.to_thread(validate_image_file, source, relative.name)
+                await asyncio.to_thread(create_thumbnail, source, thumbnail)
+            except HTTPException as exc:
+                exc.detail = f"{exc.detail}：{relative.as_posix()}"
+                raise
+            object_path = f"{target_path}/{relative.as_posix()}" if target_path else relative.as_posix()
+            prepared.append((object_path, source, thumbnail))
             total_size += size
-    except FileExistsError as exc:
-        if created:
-            shutil.rmtree(uploaded_root, ignore_errors=True)
-        raise HTTPException(status_code=409, detail="文件夹中包含冲突路径") from exc
-    except Exception:
-        if created:
-            shutil.rmtree(uploaded_root, ignore_errors=True)
-        raise
-    relative = uploaded_root.resolve().relative_to(RESOURCE_DIR.resolve()).as_posix()
+        await asyncio.to_thread(upload_prepared_batch, prepared)
     return {
-        "folderPath": relative,
-        "folderUrl": folder_url(relative),
+        "folderPath": uploaded_root,
+        "folderUrl": folder_url(uploaded_root),
         "fileCount": len(files),
         "size": total_size,
     }
+
+
+@app.get("/api/admin/files/download")
+def admin_file_download(
+    path: str = Query(max_length=500),
+    _: dict = Depends(admin_user),
+):
+    return RedirectResponse(protected_download_url(path), status_code=307)
+
+
+@app.delete("/api/admin/files", status_code=204)
+def admin_delete_file(
+    path: str = Query(max_length=500),
+    _: dict = Depends(admin_user),
+):
+    delete_image(path)
+    return Response(status_code=204)
 
 
 @app.get("/api/admin/export")

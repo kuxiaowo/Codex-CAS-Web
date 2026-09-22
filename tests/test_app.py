@@ -27,18 +27,26 @@ class AppTest(unittest.TestCase):
         os.environ["DATABASE_PATH"] = str(cls.root / "test.db")
         os.environ["OIDC_CLIENT_SECRET"] = "test-client-secret-that-is-longer-than-sixteen-bytes"
         os.environ["OIDC_COOKIE_SECURE"] = "false"
+        os.environ["APP_ENV"] = "test"
+        os.environ["MEDIA_STORAGE_BACKEND"] = "local"
         import app.config
         import app.database
         import app.auth
         import app.gallery_assets
+        import app.media_library
+        import app.media_storage
         import app.main
 
         importlib.reload(app.config)
         importlib.reload(app.database)
         importlib.reload(app.auth)
         importlib.reload(app.gallery_assets)
+        importlib.reload(app.media_storage)
+        importlib.reload(app.media_library)
+        importlib.reload(app.main)
         cls.resource_dir = cls.root / "resources"
         cls.resource_dir.mkdir()
+        app.media_storage._storage_instance = app.media_storage.LocalMediaStorage(cls.resource_dir)
         cls.assets_patch = patch.object(app.gallery_assets, "RESOURCE_DIR", cls.resource_dir)
         cls.main_resource_patch = patch.object(app.main, "RESOURCE_DIR", cls.resource_dir)
         cls.assets_patch.start()
@@ -63,6 +71,8 @@ class AppTest(unittest.TestCase):
         cls.client.__exit__(None, None, None)
         cls.main_resource_patch.stop()
         cls.assets_patch.stop()
+        import app.media_storage
+        app.media_storage.reset_media_storage_for_tests()
         cls.temp_dir.cleanup()
 
     def admin_headers(self) -> dict[str, str]:
@@ -72,10 +82,21 @@ class AppTest(unittest.TestCase):
         return self.client.get("/api/admin/categories", headers=self.admin_headers()).json()["data"][0]["id"]
 
     def create_gallery(self, name: str, *, status: str = "published") -> dict:
+        created = self.client.post(
+            "/api/admin/files/folders",
+            headers=self.admin_headers(),
+            json={"parentPath": "", "name": name},
+        )
+        self.assertIn(created.status_code, {201, 409}, created.text)
+        for filename, color in (("10.jpg", "white"), ("2.jpg", "gray")):
+            uploaded = self.client.post(
+                "/api/admin/uploads",
+                headers=self.admin_headers(),
+                data={"targetPath": name},
+                files={"file": (filename, image_bytes(color=color), "image/jpeg")},
+            )
+            self.assertEqual(uploaded.status_code, 201, uploaded.text)
         directory = self.resource_dir / name
-        directory.mkdir(exist_ok=True)
-        Image.new("RGB", (600, 1200), "white").save(directory / "10.jpg")
-        Image.new("RGB", (600, 1200), "gray").save(directory / "2.jpg")
         response = self.client.post(
             "/api/admin/galleries",
             headers=self.admin_headers(),
@@ -181,8 +202,73 @@ class AppTest(unittest.TestCase):
         self.assertEqual(item["imageCount"], 2)
         self.assertGreaterEqual(item["views"], 1)
 
+    def test_gallery_images_are_cursor_paginated_and_lazily_loaded(self) -> None:
+        import app.media_library
+        import app.media_storage
+
+        self.client.post(
+            "/api/admin/files/folders",
+            headers=self.admin_headers(),
+            json={"parentPath": "", "name": "paged"},
+        )
+        source = self.root / "page-source.jpg"
+        thumb = self.root / "page-thumb.webp"
+        Image.new("RGB", (30, 60), "white").save(source, "JPEG")
+        Image.new("RGB", (10, 20), "gray").save(thumb, "WEBP")
+        storage = app.media_storage.get_media_storage()
+        for index in range(35):
+            storage.put_file(f"galleries/paged/{index:02d}.jpg", source)
+            storage.put_file(f"thumbnails/paged/{index:02d}.jpg.webp", thumb)
+        app.media_library.write_manifest("paged")
+        created = self.client.post(
+            "/api/admin/galleries",
+            headers=self.admin_headers(),
+            json={
+                "categoryId": self.category_id(),
+                "title": "分页图集",
+                "resourceDir": "paged",
+                "status": "published",
+                "isFeatured": False,
+            },
+        )
+        gallery_id = created.json()["data"]["id"]
+        detail = self.client.get(f"/galleries/{gallery_id}")
+        self.assertEqual(detail.text.count("data-gallery-image="), 30)
+        self.assertIn('data-has-more="true"', detail.text)
+        first = self.client.get(f"/api/galleries/{gallery_id}/images?limit=30").json()
+        second = self.client.get(
+            f"/api/galleries/{gallery_id}/images",
+            params={"limit": 30, "cursor": first["nextCursor"]},
+        ).json()
+        self.assertEqual(len(first["data"]), 30)
+        self.assertEqual(len(second["data"]), 5)
+        self.assertFalse(second["hasMore"])
+
+    def test_admin_download_and_delete_use_authenticated_backend_routes(self) -> None:
+        gallery = self.create_gallery("admin-download-delete", status="draft")
+        redirect = self.client.get(
+            "/api/admin/files/download",
+            params={"path": "admin-download-delete/2.jpg"},
+            follow_redirects=False,
+        )
+        self.assertEqual(redirect.status_code, 307)
+        self.assertIn("/resources/admin-download-delete/2.jpg", redirect.headers["location"])
+        deleted = self.client.delete(
+            "/api/admin/files", params={"path": "admin-download-delete/2.jpg"}
+        )
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse((self.resource_dir / "admin-download-delete" / "2.jpg").exists())
+        self.assertIsNotNone(gallery["id"])
+
     def test_publish_requires_valid_image_but_draft_allows_empty_folder(self) -> None:
-        (self.resource_dir / "empty").mkdir()
+        self.assertEqual(
+            self.client.post(
+                "/api/admin/files/folders",
+                headers=self.admin_headers(),
+                json={"parentPath": "", "name": "empty"},
+            ).status_code,
+            201,
+        )
         payload = {
             "categoryId": self.category_id(), "title": "空目录", "resourceDir": "empty",
             "status": "published", "isFeatured": False,
@@ -307,8 +393,14 @@ class AppTest(unittest.TestCase):
         )
 
     def test_import_v2_maps_existing_category_and_adds_draft_gallery(self) -> None:
-        directory = self.resource_dir / "import-empty"
-        directory.mkdir()
+        self.assertEqual(
+            self.client.post(
+                "/api/admin/files/folders",
+                headers=self.admin_headers(),
+                json={"parentPath": "", "name": "import-empty"},
+            ).status_code,
+            201,
+        )
         category = self.client.get("/api/admin/categories", headers=self.admin_headers()).json()["data"][0]
         payload = {
             "formatVersion": 2,
