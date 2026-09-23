@@ -16,7 +16,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from app.config import settings
-from app.database import row_dict, transaction, utc_now
+from app.database import D1GatewayAdapter, D1IntegrityError, row_dict, transaction, utc_now
 
 SESSION_COOKIE = "cas_session"
 OIDC_FLOW_COOKIE = "cas_oidc_flow"
@@ -85,14 +85,21 @@ def start_oidc_login(
     verifier = secrets.token_urlsafe(64)
     challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
     with transaction(immediate=True) as connection:
-        connection.execute("DELETE FROM oidc_login_states WHERE expires_at <= ?", (utc_now(),))
-        connection.execute(
-            """
+        cleanup_sql = "DELETE FROM oidc_login_states WHERE expires_at <= ?"
+        insert_sql = """
             INSERT INTO oidc_login_states (state_hash, nonce, code_verifier, return_path, expires_at)
             VALUES (?, ?, ?, ?, ?)
-            """,
-            (_token_hash(state), nonce, verifier, safe_return_path(return_path), _future(settings.oidc_state_expire_seconds)),
-        )
+        """
+        cleanup_params = (utc_now(),)
+        insert_params = (_token_hash(state), nonce, verifier, safe_return_path(return_path), _future(settings.oidc_state_expire_seconds))
+        if hasattr(connection, "batch"):
+            connection.batch([
+                {"sql": cleanup_sql, "params": list(cleanup_params)},
+                {"sql": insert_sql, "params": list(insert_params)},
+            ])
+        else:
+            connection.execute(cleanup_sql, cleanup_params)
+            connection.execute(insert_sql, insert_params)
     parameters = {
             "response_type": "code", "client_id": settings.oidc_client_id,
             "redirect_uri": settings.oidc_redirect_uri, "scope": "openid profile",
@@ -123,11 +130,18 @@ def consume_login_state(state: str, browser_state: str | None) -> dict:
     if not browser_state or not hmac.compare_digest(state, browser_state):
         raise HTTPException(status_code=400, detail="登录请求与当前浏览器不匹配")
     with transaction(immediate=True) as connection:
-        item = row_dict(connection.execute(
-            "SELECT * FROM oidc_login_states WHERE state_hash = ?", (_token_hash(state),)
-        ).fetchone())
-        if item:
-            connection.execute("DELETE FROM oidc_login_states WHERE id = ?", (item["id"],))
+        if hasattr(connection, "batch"):
+            # DELETE ... RETURNING makes state consumption one atomic D1 operation.
+            item = row_dict(connection.execute(
+                "DELETE FROM oidc_login_states WHERE state_hash = ? AND expires_at > ? RETURNING *",
+                (_token_hash(state), utc_now()),
+            ).fetchone())
+        else:
+            item = row_dict(connection.execute(
+                "SELECT * FROM oidc_login_states WHERE state_hash = ?", (_token_hash(state),)
+            ).fetchone())
+            if item:
+                connection.execute("DELETE FROM oidc_login_states WHERE id = ?", (item["id"],))
     if not item or item["expires_at"] <= utc_now():
         raise HTTPException(status_code=400, detail="登录请求已过期或无效，请重新登录")
     return item
@@ -247,6 +261,28 @@ def provision_user(identity: dict) -> dict:
                 raise HTTPException(status_code=403, detail="本站成员资格已停用")
             return user
         candidate, suffix = username, 2
+        if isinstance(connection, D1GatewayAdapter):
+            role = "admin" if sub in settings.cas_admin_subs else "user"
+            while True:
+                try:
+                    created = row_dict(connection.execute(
+                        """INSERT INTO users
+                             (username, display_name, password_hash, auth_sub, role, is_active, created_at)
+                           VALUES (?, ?, '', ?, ?, 1, ?) RETURNING *""",
+                        (candidate, display_name, sub, role, utc_now()),
+                    ).fetchone())
+                    if created:
+                        return created
+                except D1IntegrityError:
+                    user = row_dict(connection.execute(
+                        "SELECT * FROM users WHERE auth_sub = ?", (sub,)
+                    ).fetchone())
+                    if user:
+                        if not user["is_active"]:
+                            raise HTTPException(status_code=403, detail="本站成员资格已停用")
+                        return user
+                    candidate = f"{username[:44]}-{suffix}"
+                    suffix += 1
         while connection.execute("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", (candidate,)).fetchone():
             candidate = f"{username[:44]}-{suffix}"
             suffix += 1
@@ -262,12 +298,19 @@ def provision_user(identity: dict) -> dict:
 def create_local_session(user: dict, oidc_sid: str) -> str:
     raw_token, now = secrets.token_urlsafe(48), utc_now()
     with transaction() as connection:
-        connection.execute("DELETE FROM local_sessions WHERE expires_at <= ?", (now,))
-        connection.execute(
-            """INSERT INTO local_sessions (token_hash, user_id, auth_sub, oidc_sid, created_at, last_seen_at, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (_token_hash(raw_token), user["id"], user["auth_sub"], oidc_sid, now, now, _future(settings.local_session_expire_seconds)),
-        )
+        cleanup_sql = "DELETE FROM local_sessions WHERE expires_at <= ?"
+        insert_sql = """INSERT INTO local_sessions (token_hash, user_id, auth_sub, oidc_sid, created_at, last_seen_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)"""
+        cleanup_params = (now,)
+        insert_params = (_token_hash(raw_token), user["id"], user["auth_sub"], oidc_sid, now, now, _future(settings.local_session_expire_seconds))
+        if hasattr(connection, "batch"):
+            connection.batch([
+                {"sql": cleanup_sql, "params": list(cleanup_params)},
+                {"sql": insert_sql, "params": list(insert_params)},
+            ])
+        else:
+            connection.execute(cleanup_sql, cleanup_params)
+            connection.execute(insert_sql, insert_params)
     return raw_token
 
 
@@ -376,6 +419,32 @@ def revoke_backchannel_sessions(logout_token: str) -> int:
         params = (data["sub"], str(data["sid"]))
     with transaction(immediate=True) as connection:
         now = utc_now()
+        if isinstance(connection, D1GatewayAdapter):
+            claim_marker = f"{now}#{secrets.token_hex(16)}"
+            guarded_query = query + (
+                " AND EXISTS (SELECT 1 FROM oidc_logout_events "
+                "WHERE jti_hash = ? AND received_at = ?)"
+            )
+            results = connection.batch(
+                [
+                    {
+                        "sql": "DELETE FROM oidc_logout_events WHERE expires_at <= ?",
+                        "params": [now],
+                    },
+                    {
+                        "sql": (
+                            "INSERT OR IGNORE INTO oidc_logout_events "
+                            "(jti_hash, received_at, expires_at) VALUES (?, ?, ?)"
+                        ),
+                        "params": [_token_hash(data["jti"]), claim_marker, _future(86400)],
+                    },
+                    {
+                        "sql": guarded_query,
+                        "params": [*params, _token_hash(data["jti"]), claim_marker],
+                    },
+                ]
+            )
+            return results[2].rowcount if results[1].rowcount == 1 else 0
         connection.execute("DELETE FROM oidc_logout_events WHERE expires_at <= ?", (now,))
         inserted = connection.execute(
             """INSERT OR IGNORE INTO oidc_logout_events

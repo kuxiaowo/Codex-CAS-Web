@@ -56,6 +56,11 @@ class Settings:
         "DATABASE_CONNECT_TIMEOUT_SECONDS", 5, minimum=0
     )
     database_busy_timeout_ms: int = _env_int("DATABASE_BUSY_TIMEOUT_MS", 5000)
+    # SQLite remains the test/development backend. Production uses the D1 gateway.
+    database_backend: str = os.getenv("DATABASE_BACKEND", "").strip().casefold()
+    d1_gateway_url: str = os.getenv("D1_GATEWAY_URL", "").strip().rstrip("/")
+    d1_hmac_secret: str = os.getenv("D1_HMAC_SECRET", "").strip()
+    d1_request_timeout_seconds: float = _env_float("D1_REQUEST_TIMEOUT_SECONDS", 10, minimum=1)
     upload_max_bytes: int = _env_int("UPLOAD_MAX_MB", 50, minimum=1) * 1024 * 1024
     thumbnail_max_width: int = _env_int("THUMBNAIL_MAX_WIDTH", 640, minimum=1)
     thumbnail_max_height: int = _env_int("THUMBNAIL_MAX_HEIGHT", 640, minimum=1)
@@ -152,6 +157,15 @@ def validate_runtime_settings() -> None:
         raise RuntimeError("THUMBNAIL_WEBP_METHOD 必须在 0-6 之间")
     if settings.app_environment not in {"production", "development", "test"}:
         raise RuntimeError("APP_ENV 必须是 production、development 或 test")
+    backend = settings.database_backend or ("d1" if settings.app_environment == "production" else "sqlite")
+    if backend not in {"sqlite", "d1"}:
+        raise RuntimeError("DATABASE_BACKEND 必须是 sqlite 或 d1")
+    if backend == "d1":
+        parsed_d1 = urlsplit(settings.d1_gateway_url)
+        if parsed_d1.scheme != "https" or not parsed_d1.netloc:
+            raise RuntimeError("D1_GATEWAY_URL 必须是 HTTPS 地址")
+        if len(settings.d1_hmac_secret.encode("utf-8")) < 32:
+            raise RuntimeError("D1_HMAC_SECRET 至少需要 32 个 UTF-8 字节")
     validate_media_storage_settings(settings)
     if not settings.oidc_issuer.startswith("https://"):
         raise RuntimeError("OIDC_ISSUER 必须使用 https://")

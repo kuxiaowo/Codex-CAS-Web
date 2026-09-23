@@ -32,7 +32,7 @@ from app.auth import (
     start_oidc_login,
 )
 from app.config import PROJECT_ROOT, settings, validate_runtime_settings
-from app.database import connect, get_setting, initialize_database, transaction, utc_now
+from app.database import D1GatewayAdapter, D1IntegrityError, connect, get_setting, initialize_database, transaction, utc_now
 from app.gallery_assets import IMAGE_EXTENSIONS, RESOURCE_DIR, normalize_folder_upload_path, normalize_resource_path, validate_entry_name
 from app.media_library import (
     create_folder,
@@ -527,6 +527,48 @@ def create_comment(
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=422, detail="留言不能为空")
+    connection = connect()
+    if isinstance(connection, D1GatewayAdapter):
+        try:
+            limit = int(get_setting(connection, "comment_per_minute", "8"))
+            threshold = (datetime.now(UTC) - timedelta(seconds=60)).isoformat(timespec="seconds")
+            row = connection.execute(
+                """
+                INSERT INTO comments (gallery_id, user_id, parent_id, content, status, created_at)
+                SELECT ?, ?, ?, ?, 'visible', ?
+                WHERE EXISTS (SELECT 1 FROM galleries WHERE id = ? AND status = 'published')
+                  AND (? IS NULL OR EXISTS (
+                    SELECT 1 FROM comments
+                    WHERE id = ? AND gallery_id = ? AND status = 'visible'
+                  ))
+                  AND (
+                    SELECT COUNT(*) FROM comments
+                    WHERE user_id = ? AND created_at >= ?
+                  ) < ?
+                RETURNING id
+                """,
+                (
+                    gallery_id, user["id"], payload.parent_id, content, utc_now(), gallery_id,
+                    payload.parent_id, payload.parent_id, gallery_id,
+                    user["id"], threshold, limit,
+                ),
+            ).fetchone()
+            if row is not None:
+                return {"data": {"id": row["id"]}}
+            gallery = connection.execute(
+                "SELECT id FROM galleries WHERE id = ? AND status = 'published'", (gallery_id,)
+            ).fetchone()
+            if not gallery:
+                raise HTTPException(status_code=404, detail="图集不存在")
+            if payload.parent_id and not connection.execute(
+                "SELECT id FROM comments WHERE id = ? AND gallery_id = ? AND status = 'visible'",
+                (payload.parent_id, gallery_id),
+            ).fetchone():
+                raise HTTPException(status_code=404, detail="回复的留言不存在")
+            raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+        finally:
+            connection.close()
+    connection.close()
     with transaction() as connection:
         gallery = connection.execute(
             "SELECT id FROM galleries WHERE id = ? AND status = 'published'", (gallery_id,)
@@ -601,6 +643,23 @@ def admin_update_user(
     if user_id == operator["id"] and (not payload.is_active or payload.role != "admin"):
         raise HTTPException(status_code=409, detail="不能停用自己或移除自己的管理员角色")
     with transaction() as connection:
+        if isinstance(connection, D1GatewayAdapter):
+            statements = [{
+                "sql": (
+                    "UPDATE users SET display_name = ?, role = ?, is_active = ? "
+                    "WHERE id = ? AND auth_sub IS NOT NULL RETURNING id"
+                ),
+                "params": [payload.display_name.strip(), payload.role, int(payload.is_active), user_id],
+            }]
+            if not payload.is_active:
+                statements.append({
+                    "sql": "DELETE FROM local_sessions WHERE user_id = ?",
+                    "params": [user_id],
+                })
+            results = connection.batch(statements)
+            if not results[0].fetchone():
+                raise HTTPException(status_code=404, detail="用户不存在")
+            return {"data": {"id": user_id}}
         if not connection.execute(
             "SELECT id FROM users WHERE id = ? AND auth_sub IS NOT NULL", (user_id,)
         ).fetchone():
@@ -646,16 +705,18 @@ def admin_create_category(payload: CategoryInput, _: Annotated[dict, Depends(adm
                 """
                 INSERT INTO categories
                   (name, slug, description, accent, sort_order, is_active, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
                 """,
                 (
                     payload.name.strip(), payload.slug, payload.description.strip(), payload.accent,
                     payload.sort_order, int(payload.is_active), utc_now(),
                 ),
             )
-        except sqlite3.IntegrityError as exc:
+        except (sqlite3.IntegrityError, D1IntegrityError) as exc:
             raise HTTPException(status_code=409, detail="栏目名称或标识已存在") from exc
-    return {"data": {"id": cursor.lastrowid}}
+        row = cursor.fetchone()
+        category_id = row["id"] if row else cursor.lastrowid
+    return {"data": {"id": category_id}}
 
 
 @app.patch("/api/admin/categories/{category_id}")
@@ -677,7 +738,7 @@ def admin_update_category(
                     payload.sort_order, int(payload.is_active), category_id,
                 ),
             )
-        except sqlite3.IntegrityError as exc:
+        except (sqlite3.IntegrityError, D1IntegrityError) as exc:
             raise HTTPException(status_code=409, detail="栏目名称或标识已存在") from exc
         if not cursor.rowcount:
             raise HTTPException(status_code=404, detail="栏目不存在")
@@ -687,6 +748,19 @@ def admin_update_category(
 @app.delete("/api/admin/categories/{category_id}", status_code=204)
 def admin_delete_category(category_id: int, _: Annotated[dict, Depends(admin_user)]):
     with transaction() as connection:
+        if isinstance(connection, D1GatewayAdapter):
+            deleted = connection.execute(
+                """DELETE FROM categories
+                   WHERE id = ? AND NOT EXISTS (
+                     SELECT 1 FROM galleries WHERE category_id = categories.id
+                   ) RETURNING id""",
+                (category_id,),
+            ).fetchone()
+            if deleted:
+                return
+            if connection.execute("SELECT 1 FROM categories WHERE id = ?", (category_id,)).fetchone():
+                raise HTTPException(status_code=409, detail="栏目中仍有图集，不能删除")
+            raise HTTPException(status_code=404, detail="栏目不存在")
         if connection.execute("SELECT COUNT(*) FROM galleries WHERE category_id = ?", (category_id,)).fetchone()[0]:
             raise HTTPException(status_code=409, detail="栏目中仍有图集，不能删除")
         cursor = connection.execute("DELETE FROM categories WHERE id = ?", (category_id,))
@@ -710,7 +784,7 @@ def admin_galleries(_: Annotated[dict, Depends(admin_user)]):
         connection.close()
 
 
-def _write_gallery(connection: sqlite3.Connection, payload: GalleryInput, gallery_id: int | None = None) -> int:
+def _write_gallery(connection: sqlite3.Connection | D1GatewayAdapter, payload: GalleryInput, gallery_id: int | None = None) -> int:
     if not connection.execute("SELECT id FROM categories WHERE id = ?", (payload.category_id,)).fetchone():
         raise HTTPException(status_code=422, detail="栏目不存在")
     title = payload.title.strip()
@@ -738,23 +812,24 @@ def _write_gallery(connection: sqlite3.Connection, payload: GalleryInput, galler
                 """
                 INSERT INTO galleries
                   (category_id, title, resource_dir, status, is_featured, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
                 """,
                 values + (now,),
             )
-            return int(cursor.lastrowid)
+            row = cursor.fetchone()
+            return int(row["id"] if row else cursor.lastrowid)
         cursor = connection.execute(
             """
             UPDATE galleries SET category_id = ?, title = ?, resource_dir = ?,
               status = ?, is_featured = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? RETURNING id
             """,
             values + (gallery_id,),
         )
-        if not cursor.rowcount:
+        if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="图集不存在")
         return gallery_id
-    except sqlite3.IntegrityError as exc:
+    except (sqlite3.IntegrityError, D1IntegrityError) as exc:
         raise HTTPException(status_code=409, detail="该资源文件夹已绑定其他图集") from exc
 
 
@@ -805,11 +880,13 @@ def admin_create_announcement(
         cursor = connection.execute(
             """
             INSERT INTO announcements (title, content, status, is_pinned, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (payload.title.strip(), payload.content.strip(), payload.status, int(payload.is_pinned), now, now),
         )
-    return {"data": {"id": cursor.lastrowid}}
+        row = cursor.fetchone()
+        announcement_id = row["id"] if row else cursor.lastrowid
+    return {"data": {"id": announcement_id}}
 
 
 @app.patch("/api/admin/announcements/{announcement_id}")
@@ -911,6 +988,24 @@ def admin_update_settings(
         "site_tagline": payload.site_tagline.strip(),
         "comment_per_minute": str(payload.comment_per_minute),
     }
+    connection = connect()
+    if isinstance(connection, D1GatewayAdapter):
+        try:
+            now = utc_now()
+            connection.batch([
+                {
+                    "sql": (
+                        "INSERT INTO settings (key,value,updated_at) VALUES (?,?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+                    ),
+                    "params": [key, value, now],
+                }
+                for key, value in values.items()
+            ])
+        finally:
+            connection.close()
+        return {"data": values}
+    connection.close()
     with transaction() as connection:
         for key, value in values.items():
             connection.execute(
@@ -1097,6 +1192,81 @@ def admin_import(
         raise HTTPException(status_code=422, detail="不支持的数据格式版本")
     imported = {"categories": 0, "galleries": 0, "announcements": 0}
     with transaction() as connection:
+        if isinstance(connection, D1GatewayAdapter):
+            statements: list[dict] = []
+            result_kinds: list[str] = []
+            category_slugs: dict[int, str] = {}
+            for item in payload.get("categories", []):
+                model = CategoryInput(
+                    name=item.get("name", ""), slug=item.get("slug", ""),
+                    description=item.get("description", ""), accent=item.get("accent", "#8b7cff"),
+                    sort_order=item.get("sortOrder", 10), is_active=item.get("isActive", True),
+                )
+                category_slugs[int(item.get("id", 0))] = model.slug
+                statements.append({
+                    "sql": (
+                        "INSERT INTO categories "
+                        "(name, slug, description, accent, sort_order, is_active, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(slug) DO NOTHING RETURNING id"
+                    ),
+                    "params": [model.name, model.slug, model.description, model.accent,
+                               model.sort_order, int(model.is_active), utc_now()],
+                })
+                result_kinds.append("categories")
+            for item in payload.get("galleries", []):
+                category_slug = category_slugs.get(int(item.get("categoryId", 0)))
+                if not category_slug:
+                    continue
+                model = GalleryInput(
+                    category_id=1, title=item.get("title", ""),
+                    resource_dir=item.get("resourceDir", ""),
+                    status=item.get("status", "draft"), is_featured=item.get("isFeatured", False),
+                )
+                title = model.title.strip()
+                if not title:
+                    raise HTTPException(status_code=422, detail="图集标题不能为空")
+                resource_dir = validate_gallery_directory(
+                    model.resource_dir, require_images=model.status == "published"
+                )
+                now = utc_now()
+                statements.append({
+                    "sql": (
+                        "INSERT INTO galleries "
+                        "(category_id, title, resource_dir, status, is_featured, created_at, updated_at) "
+                        "SELECT c.id, ?, ?, ?, ?, ?, ? FROM categories c WHERE c.slug = ? "
+                        "AND NOT EXISTS (SELECT 1 FROM galleries WHERE resource_dir = ? COLLATE NOCASE) "
+                        "RETURNING id"
+                    ),
+                    "params": [title, resource_dir, model.status, int(model.is_featured), now, now,
+                               category_slug, resource_dir],
+                })
+                result_kinds.append("galleries")
+            for item in payload.get("announcements", []):
+                model = AnnouncementInput(
+                    title=item.get("title", ""), content=item.get("content", ""),
+                    status=item.get("status", "published"), is_pinned=item.get("isPinned", False),
+                )
+                now = utc_now()
+                statements.append({
+                    "sql": (
+                        "INSERT INTO announcements "
+                        "(title, content, status, is_pinned, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
+                    ),
+                    "params": [model.title, model.content, model.status, int(model.is_pinned), now, now],
+                })
+                result_kinds.append("announcements")
+            if len(statements) > 100:
+                raise HTTPException(status_code=422, detail="一次最多导入 100 条数据")
+            if statements:
+                try:
+                    results = connection.batch(statements)
+                except D1IntegrityError as exc:
+                    raise HTTPException(status_code=409, detail="导入数据与现有内容冲突") from exc
+                for kind, result in zip(result_kinds, results):
+                    if result.fetchone():
+                        imported[kind] += 1
+            return {"data": imported}
         category_map: dict[int, int] = {}
         for item in payload.get("categories", []):
             existing = connection.execute("SELECT id FROM categories WHERE slug = ?", (item.get("slug"),)).fetchone()
