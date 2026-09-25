@@ -269,7 +269,8 @@ class D1GatewayAdapter:
         message = f"v1\nPOST\n/internal/db\n{request_id}\n{timestamp}\n{digest}".encode()
         signature = hmac.new(self.secret.encode(), message, hashlib.sha256).hexdigest()
         request = Request(self.url, data=payload, method="POST", headers={
-            "Content-Type": "application/json", "X-DB-Request-ID": request_id,
+            "Content-Type": "application/json", "User-Agent": "NetHub-D1-Client/1.0",
+            "X-DB-Request-ID": request_id,
             "X-DB-Timestamp": timestamp, "X-DB-Signature": signature,
         })
         try:
