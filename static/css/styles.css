@@ -363,6 +363,7 @@ input:focus, textarea:focus, select:focus { border-color: rgba(113,97,216,.52); 
 .gallery-reading-header h1 { margin: 0; font-size: clamp(38px, 6vw, 68px); line-height: 1.04; letter-spacing: -.055em; }
 .gallery-reading-header > span { padding-bottom: 8px; color: var(--quiet); font: 11px ui-monospace, monospace; }
 .gallery-reading-list { width: min(920px, 100%); margin: 0 auto; display: grid; gap: 38px; }
+.gallery-load-sentinel { width: min(920px, 100%); margin: 24px auto 0; color: var(--quiet); font: 11px ui-monospace, monospace; text-align: center; }
 .gallery-page { margin: 0; display: grid; gap: 10px; }
 .gallery-page button { padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: 0 14px 38px rgba(43,48,73,.1); cursor: zoom-in; }
 .gallery-page img { width: 100%; height: auto; display: block; }

@@ -428,6 +428,13 @@
           else loadFiles(item.path);
         }));
         if (picker) actions.push(button('选择', 'button-primary', () => chooseDirectory(item.path)));
+      } else if (!picker) {
+        actions.push(button('下载', 'button-ghost', () => { window.location.assign(item.downloadUrl); }));
+        actions.push(button('删除', 'button-danger', async () => {
+          if (!window.confirm(`确定删除 ${item.name}？此操作不会删除整个文件夹。`)) return;
+          await api(`/api/admin/files?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
+          await loadFiles(); toast('图片已删除');
+        }));
       }
       const size = item.type === 'file' ? `${Math.ceil(item.size / 1024)} KB` : '文件夹';
       return row(item.name, [size, item.url], actions);

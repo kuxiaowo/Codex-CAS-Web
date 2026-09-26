@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import hmac
+import json
+import time
+import uuid
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Iterator
+from typing import Any, Iterator, Sequence
 
 from app.config import database_path, settings
 
@@ -202,7 +209,110 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def connect() -> sqlite3.Connection:
+def _backend_name() -> str:
+    return settings.database_backend or ("d1" if settings.app_environment == "production" else "sqlite")
+
+
+class D1DatabaseError(RuntimeError):
+    """D1 gateway request or SQL error."""
+
+
+class D1IntegrityError(D1DatabaseError):
+    """D1 constraint conflict, analogous to sqlite3.IntegrityError."""
+
+
+class D1Row(dict[str, Any]):
+    """Mapping row with sqlite3.Row-compatible positional access."""
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class D1Cursor:
+    def __init__(self, result: dict[str, Any]):
+        self._rows = [D1Row(row) for row in (result.get("rows") or [])]
+        meta = result.get("meta") if isinstance(result.get("meta"), dict) else result
+        self.rowcount = int(meta.get("changes") or 0)
+        self.lastrowid = meta.get("last_row_id")
+
+    def fetchone(self):
+        return self._rows.pop(0) if self._rows else None
+
+    def fetchall(self):
+        rows, self._rows = self._rows, []
+        return rows
+
+
+class D1GatewayAdapter:
+    """Small connection-like client for the private D1 SQL gateway."""
+
+    def __init__(self, url: str | None = None, secret: str | None = None, timeout: float | None = None):
+        normalized_url = (url if url is not None else settings.d1_gateway_url).rstrip("/")
+        self.url = (
+            normalized_url
+            if normalized_url.endswith("/internal/db")
+            else normalized_url + "/internal/db"
+        )
+        self.secret = secret if secret is not None else settings.d1_hmac_secret
+        self.timeout = timeout if timeout is not None else settings.d1_request_timeout_seconds
+        if not self.url.startswith("https://"):
+            raise RuntimeError("D1_GATEWAY_URL 必须使用 HTTPS")
+        if len(self.secret.encode("utf-8")) < 32:
+            raise RuntimeError("D1_HMAC_SECRET 至少需要 32 个 UTF-8 字节")
+
+    def _request(self, statements: Sequence[dict[str, Any]], mode: str = "single") -> list[dict[str, Any]]:
+        request_id, timestamp = str(uuid.uuid4()), str(int(time.time()))
+        payload = json.dumps({"requestId": request_id, "timestamp": int(timestamp), "mode": mode, "statements": list(statements)}, separators=(",", ":"), ensure_ascii=False).encode()
+        digest = hashlib.sha256(payload).hexdigest()
+        message = f"v1\nPOST\n/internal/db\n{request_id}\n{timestamp}\n{digest}".encode()
+        signature = hmac.new(self.secret.encode(), message, hashlib.sha256).hexdigest()
+        request = Request(self.url, data=payload, method="POST", headers={
+            "Content-Type": "application/json", "User-Agent": "NetHub-D1-Client/1.0",
+            "X-DB-Request-ID": request_id,
+            "X-DB-Timestamp": timestamp, "X-DB-Signature": signature,
+        })
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            try:
+                error_body = json.loads(exc.read().decode("utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError):
+                error_body = {}
+            message = error_body.get("message") or error_body.get("error") or str(exc)
+            error_type = D1IntegrityError if exc.code == 409 or error_body.get("error") == "database_conflict" else D1DatabaseError
+            raise error_type(f"D1 网关请求失败: {message}") from exc
+        except (URLError, TimeoutError, OSError, ValueError) as exc:
+            raise D1DatabaseError(f"D1 网关请求失败: {exc}") from exc
+        if not isinstance(body, dict) or body.get("error"):
+            raise D1DatabaseError(str(body.get("error") if isinstance(body, dict) else body))
+        results = body.get("results")
+        if not isinstance(results, list):
+            raise D1DatabaseError("D1 网关响应缺少 results")
+        if len(results) != len(statements) or not all(isinstance(item, dict) for item in results):
+            raise D1DatabaseError("D1 网关响应的结果数量或格式无效")
+        return results
+
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> D1Cursor:
+        results = self._request([{"sql": sql, "params": list(params)}])
+        if not results:
+            raise D1DatabaseError("D1 网关未返回 execute 结果")
+        return D1Cursor(results[0])
+
+    def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]):
+        return self.batch([{"sql": sql, "params": list(params)} for params in seq_of_params])[-1]
+
+    def batch(self, statements: Sequence[dict[str, Any]]) -> list[D1Cursor]:
+        return [D1Cursor(result) for result in self._request(statements, mode="batch")]
+
+    def close(self) -> None:
+        return None
+
+def connect() -> sqlite3.Connection | D1GatewayAdapter:
+    if _backend_name() == "d1":
+        return D1GatewayAdapter()
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(
@@ -213,26 +323,33 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute(f"PRAGMA busy_timeout = {settings.database_busy_timeout_ms}")
+    connection.execute(
+        f"PRAGMA busy_timeout = {int(settings.database_connect_timeout_seconds * 1000)}"
+    )
     return connection
 
 
 @contextmanager
-def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection | D1GatewayAdapter]:
     connection = connect()
     try:
-        if immediate:
+        if immediate and isinstance(connection, sqlite3.Connection):
             connection.execute("BEGIN IMMEDIATE")
         yield connection
-        connection.commit()
+        if isinstance(connection, sqlite3.Connection):
+            connection.commit()
     except Exception:
-        connection.rollback()
+        if isinstance(connection, sqlite3.Connection):
+            connection.rollback()
         raise
     finally:
         connection.close()
 
 
 def initialize_database() -> None:
+    # D1 schema/default data is deployed separately. Never execute production DDL.
+    if _backend_name() == "d1":
+        return
     with transaction() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if version == 1:
@@ -274,10 +391,10 @@ def initialize_database() -> None:
             )
 
 
-def get_setting(connection: sqlite3.Connection, key: str, fallback: str = "") -> str:
+def get_setting(connection: sqlite3.Connection | D1GatewayAdapter, key: str, fallback: str = "") -> str:
     row = connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else fallback
 
 
-def row_dict(row: sqlite3.Row | None) -> dict | None:
+def row_dict(row: sqlite3.Row | D1Row | None) -> dict | None:
     return dict(row) if row is not None else None

@@ -2,7 +2,7 @@
 {% block title %}{{ gallery.title }} · {{ site.siteName }}{% endblock %}
 
 {% block content %}
-<div class="gallery-reading-shell" data-gallery-page>
+<div class="gallery-reading-shell" data-gallery-page data-gallery-id="{{ gallery.id }}" data-next-cursor="{{ gallery.imagesNextCursor or '' }}" data-has-more="{{ 'true' if gallery.imagesHasMore else 'false' }}" data-image-count="{{ gallery.imageCount }}">
   <a class="back-link" href="/?category={{ gallery.categorySlug }}">
     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
     返回{{ gallery.categoryName }}
@@ -23,6 +23,7 @@
     </figure>
     {% endfor %}
   </div>
+  <div class="gallery-load-sentinel" data-gallery-load-sentinel{% if not gallery.imagesHasMore %} hidden{% endif %}>正在加载更多图片…</div>
   {% else %}
   <div class="empty-state compact-empty"><h2>这个图集暂时没有可显示的图片</h2><p>资源目录可能已被移动，或图片格式无法识别。</p></div>
   {% endif %}

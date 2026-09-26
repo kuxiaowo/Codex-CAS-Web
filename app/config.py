@@ -47,6 +47,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
+    app_environment: str = os.getenv("APP_ENV", "production").strip().casefold()
     app_host: str = os.getenv("APP_HOST", "127.0.0.1").strip()
     app_port: int = _env_int("APP_PORT", 3300, minimum=1)
     app_reload: bool = _env_bool("APP_RELOAD", False)
@@ -55,12 +56,33 @@ class Settings:
         "DATABASE_CONNECT_TIMEOUT_SECONDS", 5, minimum=0
     )
     database_busy_timeout_ms: int = _env_int("DATABASE_BUSY_TIMEOUT_MS", 5000)
+    # SQLite remains the test/development backend. Production uses the D1 gateway.
+    database_backend: str = os.getenv("DATABASE_BACKEND", "").strip().casefold()
+    d1_gateway_url: str = os.getenv("D1_GATEWAY_URL", "").strip().rstrip("/")
+    d1_hmac_secret: str = os.getenv("D1_HMAC_SECRET", "").strip()
+    d1_request_timeout_seconds: float = _env_float("D1_REQUEST_TIMEOUT_SECONDS", 10, minimum=1)
     upload_max_bytes: int = _env_int("UPLOAD_MAX_MB", 50, minimum=1) * 1024 * 1024
     thumbnail_max_width: int = _env_int("THUMBNAIL_MAX_WIDTH", 640, minimum=1)
     thumbnail_max_height: int = _env_int("THUMBNAIL_MAX_HEIGHT", 640, minimum=1)
     thumbnail_webp_quality: int = _env_int("THUMBNAIL_WEBP_QUALITY", 82, minimum=1)
     thumbnail_webp_method: int = _env_int("THUMBNAIL_WEBP_METHOD", 6)
-    thumbnail_sync_minutes: int = _env_int("THUMBNAIL_SYNC_MINUTES", 5)
+    media_storage_backend: str = os.getenv("MEDIA_STORAGE_BACKEND", "r2").strip().casefold()
+    media_gateway_url: str = os.getenv(
+        "MEDIA_GATEWAY_URL", "https://codex-media.nethub.wiki"
+    ).strip().rstrip("/")
+    media_hmac_secret: str = os.getenv("MEDIA_HMAC_SECRET", "").strip()
+    media_request_timeout_seconds: float = _env_float(
+        "MEDIA_REQUEST_TIMEOUT_SECONDS", 30, minimum=1
+    )
+    media_download_ttl_seconds: int = _env_int(
+        "MEDIA_DOWNLOAD_TTL_SECONDS", 90, minimum=1
+    )
+    media_multipart_threshold_bytes: int = _env_int(
+        "MEDIA_MULTIPART_THRESHOLD_MB", 20, minimum=5
+    ) * 1024 * 1024
+    media_multipart_part_bytes: int = _env_int(
+        "MEDIA_MULTIPART_PART_MB", 8, minimum=5
+    ) * 1024 * 1024
     oidc_issuer: str = os.getenv("OIDC_ISSUER", "https://auth.nethub.wiki").strip().rstrip("/")
     oidc_client_id: str = os.getenv("OIDC_CLIENT_ID", "cas").strip()
     oidc_client_secret: str = os.getenv("OIDC_CLIENT_SECRET", "").strip()
@@ -97,6 +119,33 @@ def _https_or_loopback(value: str) -> bool:
         return parsed.hostname.casefold() == "localhost"
 
 
+def validate_media_storage_settings(
+    configured: Settings = settings, *, require_r2: bool = False
+) -> None:
+    """Validate only settings required by media storage clients."""
+
+    if configured.media_storage_backend not in {"r2", "local"}:
+        raise RuntimeError("MEDIA_STORAGE_BACKEND 必须是 r2 或 local")
+    if require_r2 and configured.media_storage_backend != "r2":
+        raise RuntimeError("执行迁移时 MEDIA_STORAGE_BACKEND 必须为 r2")
+    if configured.media_storage_backend == "local":
+        if configured.app_environment == "production":
+            raise RuntimeError("生产环境禁止使用本地媒体存储")
+        return
+
+    parsed_gateway = urlsplit(configured.media_gateway_url)
+    if parsed_gateway.scheme != "https" or not parsed_gateway.netloc:
+        raise RuntimeError("MEDIA_GATEWAY_URL 必须是 HTTPS 地址")
+    if len(configured.media_hmac_secret.encode("utf-8")) < 32:
+        raise RuntimeError("MEDIA_HMAC_SECRET 至少需要 32 个 UTF-8 字节")
+    if configured.media_download_ttl_seconds > 120:
+        raise RuntimeError("MEDIA_DOWNLOAD_TTL_SECONDS 不能超过 Worker 的 120 秒上限")
+    if configured.media_multipart_threshold_bytes > 25 * 1024 * 1024:
+        raise RuntimeError("MEDIA_MULTIPART_THRESHOLD_MB 不能超过 Worker 的 25 MiB 上限")
+    if configured.media_multipart_part_bytes > 25 * 1024 * 1024:
+        raise RuntimeError("MEDIA_MULTIPART_PART_MB 不能超过 Worker 的 25 MiB 上限")
+
+
 def validate_runtime_settings() -> None:
     if not settings.app_host:
         raise RuntimeError("APP_HOST 不能为空")
@@ -106,6 +155,18 @@ def validate_runtime_settings() -> None:
         raise RuntimeError("THUMBNAIL_WEBP_QUALITY 必须在 1-100 之间")
     if not 0 <= settings.thumbnail_webp_method <= 6:
         raise RuntimeError("THUMBNAIL_WEBP_METHOD 必须在 0-6 之间")
+    if settings.app_environment not in {"production", "development", "test"}:
+        raise RuntimeError("APP_ENV 必须是 production、development 或 test")
+    backend = settings.database_backend or ("d1" if settings.app_environment == "production" else "sqlite")
+    if backend not in {"sqlite", "d1"}:
+        raise RuntimeError("DATABASE_BACKEND 必须是 sqlite 或 d1")
+    if backend == "d1":
+        parsed_d1 = urlsplit(settings.d1_gateway_url)
+        if parsed_d1.scheme != "https" or not parsed_d1.netloc:
+            raise RuntimeError("D1_GATEWAY_URL 必须是 HTTPS 地址")
+        if len(settings.d1_hmac_secret.encode("utf-8")) < 32:
+            raise RuntimeError("D1_HMAC_SECRET 至少需要 32 个 UTF-8 字节")
+    validate_media_storage_settings(settings)
     if not settings.oidc_issuer.startswith("https://"):
         raise RuntimeError("OIDC_ISSUER 必须使用 https://")
     if not settings.oidc_client_id or len(settings.oidc_client_secret) < 16:
