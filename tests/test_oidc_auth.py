@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -24,6 +24,9 @@ class OidcAuthTest(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory()
         root = Path(cls.temp_dir.name)
         os.environ["DATABASE_PATH"] = str(root / "cas.db")
+        os.environ["DATABASE_BACKEND"] = "sqlite"
+        os.environ["APP_ENV"] = "test"
+        os.environ["MEDIA_STORAGE_BACKEND"] = "local"
         os.environ["OIDC_ISSUER"] = "https://auth.test"
         os.environ["OIDC_CLIENT_ID"] = "cas"
         os.environ["OIDC_CLIENT_SECRET"] = "client-secret-long-enough-for-tests"
@@ -114,6 +117,24 @@ class OidcAuthTest(unittest.TestCase):
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertTrue(query["state"] and query["nonce"])
         return {key: value[0] for key, value in query.items()}
+
+    def test_d1_login_state_is_consumed_without_returning(self) -> None:
+        state = "test-state"
+        item = {"return_path": "/", "expires_at": self.auth._future(60)}
+        connection = MagicMock()
+        connection.batch.return_value = [
+            self.database.D1Cursor({"rows": [item], "meta": {"changes": 0}}),
+            self.database.D1Cursor({"rows": [], "meta": {"changes": 1}}),
+        ]
+        with patch("app.auth.transaction") as transaction:
+            transaction.return_value.__enter__.return_value = connection
+            self.assertEqual(self.auth.consume_login_state(state, state), item)
+        statements = connection.batch.call_args.args[0]
+        self.assertEqual(len(statements), 2)
+        self.assertTrue(statements[0]["sql"].startswith("SELECT *"))
+        self.assertTrue(statements[1]["sql"].startswith("DELETE FROM"))
+        self.assertNotIn("RETURNING", statements[1]["sql"])
+        self.assertEqual(statements[0]["params"], statements[1]["params"])
 
     def test_oidc_callback_creates_member_and_cookie(self) -> None:
         request = self.begin_login()

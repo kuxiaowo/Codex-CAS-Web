@@ -131,11 +131,16 @@ def consume_login_state(state: str, browser_state: str | None) -> dict:
         raise HTTPException(status_code=400, detail="登录请求与当前浏览器不匹配")
     with transaction(immediate=True) as connection:
         if hasattr(connection, "batch"):
-            # DELETE ... RETURNING makes state consumption one atomic D1 operation.
-            item = row_dict(connection.execute(
-                "DELETE FROM oidc_login_states WHERE state_hash = ? AND expires_at > ? RETURNING *",
-                (_token_hash(state), utc_now()),
-            ).fetchone())
+            state_hash, now = _token_hash(state), utc_now()
+            results = connection.batch([
+                {"sql": "SELECT * FROM oidc_login_states WHERE state_hash = ? AND expires_at > ?",
+                 "params": [state_hash, now]},
+                {"sql": "DELETE FROM oidc_login_states WHERE state_hash = ? AND expires_at > ?",
+                 "params": [state_hash, now]},
+            ])
+            item = row_dict(results[0].fetchone())
+            if item and results[1].rowcount != 1:
+                raise HTTPException(status_code=400, detail="登录请求未能被安全消费，请重新登录")
         else:
             item = row_dict(connection.execute(
                 "SELECT * FROM oidc_login_states WHERE state_hash = ?", (_token_hash(state),)
