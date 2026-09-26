@@ -132,15 +132,17 @@ def consume_login_state(state: str, browser_state: str | None) -> dict:
     with transaction(immediate=True) as connection:
         if hasattr(connection, "batch"):
             state_hash, now = _token_hash(state), utc_now()
-            results = connection.batch([
-                {"sql": "SELECT * FROM oidc_login_states WHERE state_hash = ? AND expires_at > ?",
-                 "params": [state_hash, now]},
-                {"sql": "DELETE FROM oidc_login_states WHERE state_hash = ? AND expires_at > ?",
-                 "params": [state_hash, now]},
-            ])
-            item = row_dict(results[0].fetchone())
-            if item and results[1].rowcount != 1:
-                raise HTTPException(status_code=400, detail="登录请求未能被安全消费，请重新登录")
+            item = row_dict(connection.execute(
+                "SELECT * FROM oidc_login_states WHERE state_hash = ? AND expires_at > ?",
+                (state_hash, now),
+            ).fetchone())
+            if item:
+                deleted = connection.execute(
+                    "DELETE FROM oidc_login_states WHERE state_hash = ? AND expires_at > ?",
+                    (state_hash, now),
+                )
+                if deleted.rowcount != 1:
+                    raise HTTPException(status_code=400, detail="登录请求未能被安全消费，请重新登录")
         else:
             item = row_dict(connection.execute(
                 "SELECT * FROM oidc_login_states WHERE state_hash = ?", (_token_hash(state),)

@@ -122,19 +122,19 @@ class OidcAuthTest(unittest.TestCase):
         state = "test-state"
         item = {"return_path": "/", "expires_at": self.auth._future(60)}
         connection = MagicMock()
-        connection.batch.return_value = [
+        connection.execute.side_effect = [
             self.database.D1Cursor({"rows": [item], "meta": {"changes": 0}}),
             self.database.D1Cursor({"rows": [], "meta": {"changes": 1}}),
         ]
         with patch("app.auth.transaction") as transaction:
             transaction.return_value.__enter__.return_value = connection
             self.assertEqual(self.auth.consume_login_state(state, state), item)
-        statements = connection.batch.call_args.args[0]
+        statements = [call.args for call in connection.execute.call_args_list]
         self.assertEqual(len(statements), 2)
-        self.assertTrue(statements[0]["sql"].startswith("SELECT *"))
-        self.assertTrue(statements[1]["sql"].startswith("DELETE FROM"))
-        self.assertNotIn("RETURNING", statements[1]["sql"])
-        self.assertEqual(statements[0]["params"], statements[1]["params"])
+        self.assertTrue(statements[0][0].startswith("SELECT *"))
+        self.assertTrue(statements[1][0].startswith("DELETE FROM"))
+        self.assertNotIn("RETURNING", statements[1][0])
+        self.assertEqual(statements[0][1], statements[1][1])
 
     def test_oidc_callback_creates_member_and_cookie(self) -> None:
         request = self.begin_login()
