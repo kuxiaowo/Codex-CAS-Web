@@ -78,6 +78,10 @@ class AppTest(unittest.TestCase):
     def admin_headers(self) -> dict[str, str]:
         return {}
 
+    def test_authenticated_response_sets_trusted_analytics_subject(self) -> None:
+        response = self.client.get("/", headers={"X-Nethub-User-Sub": "spoof"})
+        self.assertEqual(response.headers.get("X-Nethub-User-Sub"), "test-admin-sub")
+
     def category_id(self) -> int:
         return self.client.get("/api/admin/categories", headers=self.admin_headers()).json()["data"][0]["id"]
 

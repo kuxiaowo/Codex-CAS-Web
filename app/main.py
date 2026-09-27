@@ -98,6 +98,14 @@ async def no_store_dynamic_pages(request: Request, call_next):
     ):
         return JSONResponse(status_code=403, content={"detail": "拒绝跨站请求"})
     response = await call_next(request)
+    sub = getattr(request.state, "analytics_user_sub", None)
+    if not sub and request.cookies.get("cas_session"):
+        try:
+            sub = current_user(request).get("auth_sub")
+        except HTTPException:
+            sub = None
+    if sub:
+        response.headers["X-Nethub-User-Sub"] = str(sub)
     path = request.url.path
     is_public_gallery_page = request.method == "GET" and (
         path == "/" or (path.startswith("/galleries/") and path.removeprefix("/galleries/").isdigit())
