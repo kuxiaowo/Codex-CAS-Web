@@ -26,6 +26,7 @@ _manifest_locks_guard = threading.Lock()
 _manifest_locks: dict[str, threading.Lock] = {}
 _summary_lock = threading.Lock()
 _summary_cache: dict[str, tuple[float, dict]] = {}
+_SUMMARY_CACHE_TTL_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,7 @@ def gallery_summary(resource_dir: str) -> dict:
     now = time.monotonic()
     with _summary_lock:
         cached = _summary_cache.get(cache_key)
-        if cached and now - cached[0] < 60:
+        if cached and now - cached[0] < _SUMMARY_CACHE_TTL_SECONDS:
             return dict(cached[1])
     objects = _all_gallery_objects(resource_dir)
     first = _image_dict(objects[0], resource_dir) if objects else None
