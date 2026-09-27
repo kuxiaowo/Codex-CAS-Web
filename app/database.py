@@ -323,6 +323,7 @@ def connect() -> sqlite3.Connection | D1GatewayAdapter:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = FULL")
     connection.execute(
         f"PRAGMA busy_timeout = {int(settings.database_connect_timeout_seconds * 1000)}"
     )
