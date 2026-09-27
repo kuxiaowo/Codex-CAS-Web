@@ -130,6 +130,44 @@ class AppTest(unittest.TestCase):
         self.assertIn("小组创建与维护", response.text)
         self.assertEqual(self.client.get("/api/health").json(), {"status": "ok"})
 
+    def test_d1_home_uses_one_read_only_batch(self) -> None:
+        local_database = self.database
+
+        class ReadOnlyD1(local_database.D1GatewayAdapter):
+            def __init__(self):
+                self.calls = []
+
+            def batch(self, statements):
+                self.calls.append(statements)
+                connection = local_database.connect()
+                try:
+                    return [
+                        local_database.D1Cursor({
+                            "rows": [dict(row) for row in connection.execute(
+                                statement["sql"], statement["params"]
+                            ).fetchall()]
+                        })
+                        for statement in statements
+                    ]
+                finally:
+                    connection.close()
+
+            def close(self):
+                pass
+
+        adapter = ReadOnlyD1()
+        with patch.object(self.main, "connect", return_value=adapter):
+            response = self.client.get("/?q=not-present&category=galleries")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("Note Gallery", response.text)
+        self.assertEqual(len(adapter.calls), 1)
+        self.assertEqual(len(adapter.calls[0]), 5)
+        self.assertTrue(all(
+            statement["sql"].lstrip().upper().startswith("SELECT")
+            for statement in adapter.calls[0]
+        ))
+
     def test_login_action_uses_same_page_accounts_flow(self) -> None:
         from fastapi.testclient import TestClient
 

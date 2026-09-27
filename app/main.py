@@ -120,9 +120,13 @@ def _site_context(connection: sqlite3.Connection) -> dict:
 
 
 def _categories(connection: sqlite3.Connection, *, include_inactive: bool = False) -> list[dict]:
+    rows = connection.execute(_categories_sql(include_inactive=include_inactive)).fetchall()
+    return [_category_dict(row) for row in rows]
+
+
+def _categories_sql(*, include_inactive: bool = False) -> str:
     where = "" if include_inactive else "WHERE c.is_active = 1"
-    rows = connection.execute(
-        f"""
+    return f"""
         SELECT c.*, COUNT(CASE WHEN g.status = 'published' THEN 1 END) AS gallery_count
         FROM categories c
         LEFT JOIN galleries g ON g.category_id = c.id
@@ -130,8 +134,6 @@ def _categories(connection: sqlite3.Connection, *, include_inactive: bool = Fals
         GROUP BY c.id
         ORDER BY c.sort_order, c.id
         """
-    ).fetchall()
-    return [_category_dict(row) for row in rows]
 
 
 def _category_dict(row: sqlite3.Row) -> dict:
@@ -288,27 +290,46 @@ def home(
             term = f"%{q.strip()}%"
             params.append(term)
         sql += " ORDER BY g.is_featured DESC, g.updated_at DESC, g.id DESC"
-        galleries = [_gallery_dict(row) for row in connection.execute(sql, params).fetchall()]
-        announcements = [
-            _announcement_dict(row)
-            for row in connection.execute(
-                """
-                SELECT * FROM announcements WHERE status = 'published'
-                ORDER BY is_pinned DESC, created_at DESC LIMIT 3
-                """
-            ).fetchall()
-        ]
+        announcements_sql = """
+            SELECT * FROM announcements WHERE status = 'published'
+            ORDER BY is_pinned DESC, created_at DESC LIMIT 3
+        """
+        if isinstance(connection, D1GatewayAdapter):
+            gallery_rows, announcement_rows, setting_rows, category_rows, count_rows = (
+                cursor.fetchall()
+                for cursor in connection.batch([
+                    {"sql": sql, "params": params},
+                    {"sql": announcements_sql, "params": []},
+                    {"sql": "SELECT key, value FROM settings WHERE key IN (?, ?)",
+                     "params": ["site_name", "site_tagline"]},
+                    {"sql": _categories_sql(), "params": []},
+                    {"sql": "SELECT COUNT(*) AS count FROM galleries WHERE status = 'published'", "params": []},
+                ])
+            )
+            settings_values = {row["key"]: row["value"] for row in setting_rows}
+            site = {
+                "siteName": settings_values.get("site_name", "Note Gallery"),
+                "siteTagline": settings_values.get("site_tagline", "一个简单的笔记集合站。"),
+            }
+            categories = [_category_dict(row) for row in category_rows]
+            total_galleries = count_rows[0]["count"]
+        else:
+            gallery_rows = connection.execute(sql, params).fetchall()
+            announcement_rows = connection.execute(announcements_sql).fetchall()
+            site = _site_context(connection)
+            categories = _categories(connection)
+            total_galleries = connection.execute(
+                "SELECT COUNT(*) FROM galleries WHERE status = 'published'"
+            ).fetchone()[0]
         context = {
             "request": request,
-            "site": _site_context(connection),
-            "categories": _categories(connection),
-            "galleries": galleries,
-            "announcements": announcements,
+            "site": site,
+            "categories": categories,
+            "galleries": [_gallery_dict(row) for row in gallery_rows],
+            "announcements": [_announcement_dict(row) for row in announcement_rows],
             "query": q,
             "activeCategory": category,
-            "totalGalleries": connection.execute(
-                "SELECT COUNT(*) FROM galleries WHERE status = 'published'"
-            ).fetchone()[0],
+            "totalGalleries": total_galleries,
         }
     finally:
         connection.close()
