@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated
 
-from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -98,9 +98,17 @@ async def no_store_dynamic_pages(request: Request, call_next):
     ):
         return JSONResponse(status_code=403, content={"detail": "拒绝跨站请求"})
     response = await call_next(request)
-    if not request.url.path.startswith(("/static/", "/resources/")):
+    path = request.url.path
+    is_public_gallery_page = request.method == "GET" and (
+        path == "/" or (path.startswith("/galleries/") and path.removeprefix("/galleries/").isdigit())
+    )
+    if is_public_gallery_page:
+        # Gallery HTML is public. Keep the shared cache short enough for edits
+        # to become visible while avoiding a full origin render per visitor.
+        response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300, must-revalidate"
+    elif not path.startswith(("/static/", "/resources/")):
         response.headers["Cache-Control"] = "no-store, max-age=0"
-    elif request.url.path.startswith("/resources/"):
+    elif path.startswith("/resources/"):
         response.headers["Cache-Control"] = "public, max-age=3600, must-revalidate"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -336,27 +344,67 @@ def home(
     return templates.TemplateResponse(request, "index.html", context)
 
 
+def _increment_gallery_views(gallery_id: int) -> None:
+    try:
+        with transaction() as connection:
+            connection.execute("UPDATE galleries SET views = views + 1 WHERE id = ?", (gallery_id,))
+    except Exception:
+        # A view counter must never turn a successful page render into a 500.
+        return
+
+
 @app.get("/galleries/{gallery_id}", response_class=HTMLResponse)
-def gallery_detail(request: Request, gallery_id: int):
-    with transaction() as connection:
-        row = connection.execute(
-            """
-            SELECT g.*, c.name AS category_name, c.slug AS category_slug
-            FROM galleries g JOIN categories c ON c.id = g.category_id
-            WHERE g.id = ? AND g.status = 'published' AND c.is_active = 1
-            """,
-            (gallery_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="图集不存在")
-        connection.execute("UPDATE galleries SET views = views + 1 WHERE id = ?", (row["id"],))
-        gallery = _gallery_dict(row, include_images=True)
-        context = {
-            "request": request,
-            "site": _site_context(connection),
-            "categories": _categories(connection),
-            "gallery": gallery,
-        }
+def gallery_detail(request: Request, gallery_id: int, background_tasks: BackgroundTasks):
+    connection = connect()
+    try:
+        if isinstance(connection, D1GatewayAdapter):
+            batch_results = connection.batch([
+                {
+                    "sql": """
+                        SELECT g.*, c.name AS category_name, c.slug AS category_slug
+                        FROM galleries g JOIN categories c ON c.id = g.category_id
+                        WHERE g.id = ? AND g.status = 'published' AND c.is_active = 1
+                    """,
+                    "params": [gallery_id],
+                },
+                {"sql": "SELECT key, value FROM settings WHERE key IN (?, ?)", "params": ["site_name", "site_tagline"]},
+                {"sql": _categories_sql(), "params": []},
+            ])
+            row = batch_results[0].fetchone()
+            setting_rows = batch_results[1].fetchall()
+            category_rows = batch_results[2].fetchall()
+            if not row:
+                raise HTTPException(status_code=404, detail="图集不存在")
+            settings_values = {item["key"]: item["value"] for item in setting_rows}
+            site = {
+                "siteName": settings_values.get("site_name", "Note Gallery"),
+                "siteTagline": settings_values.get("site_tagline", "一个简单的笔记集合站。"),
+            }
+            categories = [_category_dict(item) for item in category_rows]
+        else:
+            row = connection.execute(
+                """
+                SELECT g.*, c.name AS category_name, c.slug AS category_slug
+                FROM galleries g JOIN categories c ON c.id = g.category_id
+                WHERE g.id = ? AND g.status = 'published' AND c.is_active = 1
+                """,
+                (gallery_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="图集不存在")
+            site = _site_context(connection)
+            categories = _categories(connection)
+    finally:
+        connection.close()
+
+    gallery = _gallery_dict(row, include_images=True)
+    background_tasks.add_task(_increment_gallery_views, gallery_id)
+    context = {
+        "request": request,
+        "site": site,
+        "categories": categories,
+        "gallery": gallery,
+    }
     return templates.TemplateResponse(request, "gallery.html", context)
 
 
