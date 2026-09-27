@@ -26,6 +26,7 @@ _manifest_locks_guard = threading.Lock()
 _manifest_locks: dict[str, threading.Lock] = {}
 _summary_lock = threading.Lock()
 _summary_cache: dict[str, tuple[float, dict]] = {}
+_objects_cache: dict[str, tuple[float, list[MediaObject]]] = {}
 _SUMMARY_CACHE_TTL_SECONDS = 300
 
 
@@ -88,25 +89,53 @@ def gallery_images(
     resource_dir = normalize_resource_path(resource_dir, allow_root=False)
     if not 1 <= limit <= 100:
         raise HTTPException(status_code=422, detail="limit 必须在 1-100 之间")
-    storage = get_media_storage()
-    prefix = f"galleries/{resource_dir}/"
-    images: list[dict] = []
-    next_cursor = cursor
-    has_more = True
-    while len(images) < limit and has_more:
-        page = storage.list(prefix, cursor=next_cursor, limit=limit - len(images))
-        for item in page.objects:
-            if _direct_child(item.key, prefix) is not None:
-                images.append(_image_dict(item, resource_dir))
-        next_cursor = page.next_cursor
-        has_more = page.has_more
-    images.sort(
-        key=lambda item: [
+    if cursor and cursor.startswith("local:"):
+        try:
+            start = int(cursor.removeprefix("local:"))
+        except ValueError as exc:
+            raise ValueError("图片分页游标不合法") from exc
+        if start < 0:
+            raise ValueError("图片分页游标不合法")
+        objects = _cached_gallery_objects(resource_dir)
+    elif cursor:
+        # Accept cursors issued by older releases while they are still in use.
+        storage = get_media_storage()
+        prefix = f"galleries/{resource_dir}/"
+        page = storage.list(prefix, cursor=cursor, limit=limit)
+        images = [
+            _image_dict(item, resource_dir)
+            for item in page.objects
+            if _direct_child(item.key, prefix) is not None
+        ]
+        images.sort(key=lambda item: [
             int(part) if part.isdigit() else part.casefold()
             for part in re.split(r"(\d+)", item["name"])
-        ]
-    )
-    return GalleryPage(images, next_cursor if has_more else None, has_more)
+        ])
+        return GalleryPage(images, page.next_cursor if page.has_more else None, page.has_more)
+    else:
+        start = 0
+        objects = _cached_gallery_objects(resource_dir)
+
+    selected = objects[start : start + limit]
+    images = [_image_dict(item, resource_dir) for item in selected]
+    end = start + len(selected)
+    has_more = end < len(objects)
+    return GalleryPage(images, f"local:{end}" if has_more else None, has_more)
+
+
+def _cached_gallery_objects(resource_dir: str) -> list[MediaObject]:
+    """Reuse one R2 listing for the summary and first gallery page."""
+    resource_dir = normalize_resource_path(resource_dir, allow_root=False)
+    cache_key = resource_dir.casefold()
+    now = time.monotonic()
+    with _summary_lock:
+        cached = _objects_cache.get(cache_key)
+        if cached and now - cached[0] < _SUMMARY_CACHE_TTL_SECONDS:
+            return list(cached[1])
+    objects = _all_gallery_objects(resource_dir)
+    with _summary_lock:
+        _objects_cache[cache_key] = (now, list(objects))
+    return objects
 
 
 def _all_gallery_objects(resource_dir: str) -> list[MediaObject]:
@@ -127,7 +156,9 @@ def _all_gallery_objects(resource_dir: str) -> list[MediaObject]:
 
 def invalidate_summary(resource_dir: str) -> None:
     with _summary_lock:
-        _summary_cache.pop(resource_dir.casefold(), None)
+        cache_key = resource_dir.casefold()
+        _summary_cache.pop(cache_key, None)
+        _objects_cache.pop(cache_key, None)
 
 
 def gallery_summary(resource_dir: str) -> dict:
@@ -138,7 +169,7 @@ def gallery_summary(resource_dir: str) -> dict:
         cached = _summary_cache.get(cache_key)
         if cached and now - cached[0] < _SUMMARY_CACHE_TTL_SECONDS:
             return dict(cached[1])
-    objects = _all_gallery_objects(resource_dir)
+    objects = _cached_gallery_objects(resource_dir)
     first = _image_dict(objects[0], resource_dir) if objects else None
     summary = {"imageCount": len(objects), "cover": first}
     with _summary_lock:

@@ -228,6 +228,7 @@ class AppTest(unittest.TestCase):
         self.assertIn("图集 scan-pages", listed.text)
         detail = self.client.get(f"/galleries/{gallery['id']}")
         self.assertEqual(detail.status_code, 200)
+        self.assertIn("s-maxage=300", detail.headers["cache-control"])
         self.assertLess(detail.text.index("2.jpg"), detail.text.index("10.jpg"))
         image_sources = re.findall(
             r'<img src="([^"]+)" data-original-src="([^"]+)"', detail.text
