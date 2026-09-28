@@ -58,6 +58,8 @@ from app.schemas import (
     UserUpdateInput,
 )
 from app.turnstile import verify_turnstile
+from app.moderation import site as moderation_site, router as moderation_router
+from nethub_moderation.site import enqueue
 
 STATIC_DIR = PROJECT_ROOT / "static"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
@@ -79,6 +81,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.include_router(moderation_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 if settings.media_storage_backend == "local":
     app.mount("/resources", StaticFiles(directory=RESOURCE_DIR), name="resources")
@@ -255,7 +258,7 @@ def _comment_dict(row: sqlite3.Row) -> dict:
             f"{settings.oidc_issuer}/avatars/{data['auth_sub']}" if data.get("auth_sub") else ""
         ),
         "parentId": data["parent_id"],
-        "content": data["content"],
+        "content": data["content"] if data["status"] == "visible" else "",
         "status": data["status"],
         "createdAt": data["created_at"],
     }
@@ -586,12 +589,23 @@ def list_comments(gallery_id: int):
             """
             SELECT c.*, u.display_name, u.auth_sub
             FROM comments c JOIN users u ON u.id = c.user_id
-            WHERE c.gallery_id = ? AND c.status = 'visible'
+            WHERE c.gallery_id = ?
             ORDER BY c.created_at, c.id
             """,
             (gallery_id,),
         ).fetchall()
-        return {"data": [_comment_dict(row) for row in rows]}
+        by_id = {row["id"]: row for row in rows}
+        retained = set()
+        for row in rows:
+            if row["status"] != "visible":
+                continue
+            current = row
+            while current["id"] not in retained:
+                retained.add(current["id"])
+                current = by_id.get(current["parent_id"])
+                if current is None:
+                    break
+        return {"data": [_comment_dict(row) for row in rows if row["id"] in retained]}
     finally:
         connection.close()
 
@@ -601,6 +615,7 @@ def create_comment(
     gallery_id: int,
     payload: CommentInput,
     request: Request,
+    background_tasks: BackgroundTasks,
     user: Annotated[dict, Depends(current_user)],
 ):
     verify_turnstile(payload.turnstile_token, "comment")
@@ -671,7 +686,10 @@ def create_comment(
             """,
             (gallery_id, user["id"], payload.parent_id, content, utc_now()),
         )
-    return {"data": {"id": cursor.lastrowid}}
+        comment_id = cursor.lastrowid
+        enqueue(connection, comment_id)
+    background_tasks.add_task(moderation_site.release, comment_id)
+    return {"data": {"id": comment_id, "moderationStatus": "pending"}}
 
 
 @app.get("/api/admin/dashboard")
@@ -1029,18 +1047,39 @@ def admin_toggle_comment(
     if status not in {"visible", "hidden"}:
         raise HTTPException(status_code=422, detail="留言状态无效")
     with transaction() as connection:
-        cursor = connection.execute("UPDATE comments SET status = ? WHERE id = ?", (status, comment_id))
+        pending = connection.execute("SELECT state FROM _moderation_jobs WHERE comment_id=?", (comment_id,)).fetchone()
+        if pending and pending["state"] == "review":
+            raise HTTPException(409, "请在评论审核中处理这条待复核留言")
+        cursor = connection.execute("UPDATE comments SET status = ? WHERE id = ? AND status <> 'deleted'", (status, comment_id))
         if not cursor.rowcount:
             raise HTTPException(status_code=404, detail="留言不存在")
     return {"data": {"id": comment_id}}
 
 
 @app.delete("/api/admin/comments/{comment_id}", status_code=204)
-def admin_delete_comment(comment_id: int, _: Annotated[dict, Depends(admin_user)]):
-    with transaction() as connection:
-        cursor = connection.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
-        if not cursor.rowcount:
-            raise HTTPException(status_code=404, detail="留言不存在")
+def admin_delete_comment(comment_id: int, payload: dict = Body(default={}), admin: dict = Depends(admin_user)):
+    try:
+        moderation_site.delete(comment_id, admin["id"], payload.get("reasons", []), payload.get("note", ""))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.get("/api/message-center/unread-count")
+def message_center_unread_count(user: dict = Depends(current_user)):
+    count = moderation_site.unread(user["id"])
+    return {"system":count,"total":count}
+
+
+@app.get("/messages", response_class=HTMLResponse)
+def system_messages_page(request: Request):
+    connection = connect()
+    try:
+        context = {"request": request, "site": _site_context(connection), "categories": _categories(connection)}
+    finally:
+        connection.close()
+    return templates.TemplateResponse(request, "messages.html", context)
 
 
 @app.get("/api/admin/settings")

@@ -166,7 +166,7 @@ class DatabaseMigrationTest(unittest.TestCase):
                 database.initialize_database()
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 5)
                     states = dict(
                         migrated.execute("SELECT username, is_active FROM users").fetchall()
                     )
@@ -213,7 +213,7 @@ class DatabaseMigrationTest(unittest.TestCase):
                 database.initialize_database()
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 5)
                     self.assertEqual(migrated.execute("SELECT username FROM users").fetchone()[0], "admin")
                     self.assertEqual(migrated.execute("SELECT password_hash FROM users").fetchone()[0], "")
                     self.assertEqual(migrated.execute("SELECT is_active FROM users").fetchone()[0], 0)

@@ -17,6 +17,8 @@ from typing import Any, Iterator, Sequence
 from app.config import database_path, settings
 
 
+from nethub_moderation.site import SCHEMA as MODERATION_SCHEMA
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -70,7 +72,7 @@ CREATE TABLE IF NOT EXISTS comments (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'visible' CHECK (status IN ('visible', 'hidden')),
+  status TEXT NOT NULL DEFAULT 'visible' CHECK (status IN ('visible', 'hidden', 'deleted')),
   created_at TEXT NOT NULL
 );
 
@@ -123,7 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_local_sessions_user ON local_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_local_sessions_subject ON local_sessions(auth_sub, oidc_sid);
 CREATE INDEX IF NOT EXISTS idx_oidc_login_states_expires ON oidc_login_states(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_logout_events_expires ON oidc_logout_events(expires_at);
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 """
 
 MIGRATE_V1_TO_V2 = """
@@ -347,6 +349,11 @@ def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection | D1G
         connection.close()
 
 
+from nethub_moderation.migration import CAS_MIGRATION as MIGRATE_V4_TO_V5
+
+SCHEMA += MODERATION_SCHEMA
+
+
 def initialize_database() -> None:
     # D1 schema/default data is deployed separately. Never execute production DDL.
     if _backend_name() == "d1":
@@ -364,10 +371,16 @@ def initialize_database() -> None:
             connection.executescript(MIGRATE_V3_TO_V4)
         elif version == 3:
             connection.executescript(MIGRATE_V3_TO_V4)
-        elif version != 4:
+        elif version == 4:
+            connection.executescript(MIGRATE_V4_TO_V5)
+        elif version != 5:
             raise RuntimeError(f"不支持的数据库版本：{version}")
         else:
             connection.executescript(SCHEMA)
+        if connection.execute("PRAGMA user_version").fetchone()[0] == 4:
+            connection.executescript(MIGRATE_V4_TO_V5)
+        if connection.execute("PRAGMA foreign_key_check").fetchone():
+            raise RuntimeError("评论审核迁移后外键检查失败")
         now = utc_now()
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
