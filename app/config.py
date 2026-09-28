@@ -90,6 +90,8 @@ class Settings:
         "OIDC_REDIRECT_URI", "https://codex.nethub.wiki/api/auth/callback"
     ).strip()
     oidc_cookie_secure: bool = _env_bool("OIDC_COOKIE_SECURE", True)
+    turnstile_site_key: str = os.getenv("TURNSTILE_SITE_KEY", "").strip()
+    turnstile_secret_key: str = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
     oidc_state_expire_seconds: int = _env_int("OIDC_STATE_EXPIRE_SECONDS", 600, minimum=60)
     local_session_expire_seconds: int = _env_int(
         "LOCAL_SESSION_EXPIRE_SECONDS", 7 * 86400, minimum=300
@@ -157,6 +159,10 @@ def validate_runtime_settings() -> None:
         raise RuntimeError("THUMBNAIL_WEBP_METHOD 必须在 0-6 之间")
     if settings.app_environment not in {"production", "development", "test"}:
         raise RuntimeError("APP_ENV 必须是 production、development 或 test")
+    if settings.app_environment == "production" and (
+        not settings.turnstile_site_key or not settings.turnstile_secret_key
+    ):
+        raise RuntimeError("生产环境必须配置 TURNSTILE_SITE_KEY 和 TURNSTILE_SECRET_KEY")
     backend = settings.database_backend or ("d1" if settings.app_environment == "production" else "sqlite")
     if backend not in {"sqlite", "d1"}:
         raise RuntimeError("DATABASE_BACKEND 必须是 sqlite 或 d1")

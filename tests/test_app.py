@@ -49,8 +49,10 @@ class AppTest(unittest.TestCase):
         app.media_storage._storage_instance = app.media_storage.LocalMediaStorage(cls.resource_dir)
         cls.assets_patch = patch.object(app.gallery_assets, "RESOURCE_DIR", cls.resource_dir)
         cls.main_resource_patch = patch.object(app.main, "RESOURCE_DIR", cls.resource_dir)
+        cls.turnstile_patch = patch.object(app.main, "verify_turnstile")
         cls.assets_patch.start()
         cls.main_resource_patch.start()
+        cls.turnstile_patch.start()
         from fastapi.testclient import TestClient
 
         cls.main = app.main
@@ -70,6 +72,7 @@ class AppTest(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.client.__exit__(None, None, None)
         cls.main_resource_patch.stop()
+        cls.turnstile_patch.stop()
         cls.assets_patch.stop()
         import app.media_storage
         app.media_storage.reset_media_storage_for_tests()
@@ -334,7 +337,7 @@ class AppTest(unittest.TestCase):
         self.client.cookies.set(SESSION_COOKIE, create_local_session({"id": cursor.lastrowid, "auth_sub": "test-reader-sub"}, "reader-sid"))
         posted = self.client.post(
             f"/api/galleries/{gallery['id']}/comments",
-            json={"content": "这份图集很清楚。"},
+            json={"content": "这份图集很清楚。", "turnstileToken": "test-token"},
         )
         self.client.cookies.set(SESSION_COOKIE, original_cookie)
         self.assertEqual(posted.status_code, 201, posted.text)

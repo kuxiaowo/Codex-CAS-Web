@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ gallery.title }} · {{ site.siteName }}{% endblock %}
+{% block head %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{% endblock %}
 
 {% block content %}
 <div class="gallery-reading-shell" data-gallery-page data-gallery-id="{{ gallery.id }}" data-next-cursor="{{ gallery.imagesNextCursor or '' }}" data-has-more="{{ 'true' if gallery.imagesHasMore else 'false' }}" data-image-count="{{ gallery.imageCount }}">
@@ -32,6 +33,7 @@
     <form class="comment-form" data-comment-form>
       <label for="comment-content">留言内容</label>
       <textarea id="comment-content" name="content" rows="4" maxlength="1000" placeholder="写下你的补充或疑问……" required></textarea>
+      <div class="cf-turnstile" data-sitekey="{{ turnstile_site_key }}" data-action="comment"></div>
       <div class="form-actions"><small>需要登录后留言</small><button class="button button-primary" type="submit">发布留言</button></div>
     </form>
     <div class="comment-list" data-comment-list></div>

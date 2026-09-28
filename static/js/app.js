@@ -123,9 +123,16 @@
       if (!account) { window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`); return; }
       const content = form.elements.content.value.trim(); if (!content) return;
       const button = form.querySelector('button[type="submit"]'); button.disabled = true;
-      try { await api(`/api/galleries/${galleryId}/comments`, { method: 'POST', body: JSON.stringify({ content }) }); form.reset(); toast('留言已发布'); await load(); }
+      try {
+        const turnstileToken = form.querySelector('[name="cf-turnstile-response"]')?.value;
+        if (!turnstileToken) throw new Error('请完成人机验证');
+        await api(`/api/galleries/${galleryId}/comments`, {
+          method: 'POST', body: JSON.stringify({ content, turnstileToken }),
+        });
+        form.reset(); toast('留言已发布'); await load();
+      }
       catch (error) { if (error.status === 401) window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`); else toast(error.message, true); }
-      finally { button.disabled = false; }
+      finally { window.turnstile?.reset(); button.disabled = false; }
     });
     await load();
   }

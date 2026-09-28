@@ -17,6 +17,7 @@ class ApiModel(BaseModel):
 class CommentInput(ApiModel):
     content: str = Field(min_length=1, max_length=1000)
     parent_id: int | None = None
+    turnstile_token: str = Field(max_length=2048)
 
 
 class CategoryInput(ApiModel):

@@ -57,6 +57,7 @@ from app.schemas import (
     SettingsInput,
     UserUpdateInput,
 )
+from app.turnstile import verify_turnstile
 
 STATIC_DIR = PROJECT_ROOT / "static"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
@@ -412,6 +413,7 @@ def gallery_detail(request: Request, gallery_id: int, background_tasks: Backgrou
         "site": site,
         "categories": categories,
         "gallery": gallery,
+        "turnstile_site_key": settings.turnstile_site_key,
     }
     return templates.TemplateResponse(request, "gallery.html", context)
 
@@ -601,6 +603,7 @@ def create_comment(
     request: Request,
     user: Annotated[dict, Depends(current_user)],
 ):
+    verify_turnstile(payload.turnstile_token, "comment")
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=422, detail="留言不能为空")
