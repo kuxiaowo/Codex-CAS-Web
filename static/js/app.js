@@ -108,6 +108,7 @@
       const {data} = await api(`/api/galleries/${galleryId}/comments`);
       const byId = new Map(data.map(c=>[c.id,c]));
       const rootId = comment => {const seen=new Set();while(comment.parentId && byId.has(comment.parentId) && !seen.has(comment.id)){seen.add(comment.id);comment=byId.get(comment.parentId);}return comment.id;};
+      if(replying && (!byId.has(replying)||byId.get(replying).status!=='visible')){replyLabel.textContent='原留言正在复核或已删除；回复草稿已保留';}
       list.replaceChildren();
       if(!data.length){const empty=document.createElement('div');empty.className='comment-empty';empty.textContent='还没有留言。你可以写下第一条补充。';list.append(empty);return;}
       function item(comment, nested=false){
@@ -133,7 +134,6 @@
       }
       const groups=new Map();data.forEach(c=>{const id=rootId(c);if(!groups.has(id))groups.set(id,[]);groups.get(id).push(c);});
       groups.forEach((comments,id)=>{const thread=document.createElement('section');thread.className='cas-comment-thread';const parent=byId.get(id);if(parent)thread.append(item(parent));comments.filter(c=>c.id!==id).forEach(c=>thread.append(item(c,true)));list.append(thread);});
-      if(replying && (!byId.has(replying)||byId.get(replying).status!=='visible')){replyLabel.textContent='原留言正在复核或已删除；回复草稿已保留';}
     }
     form.addEventListener('submit',async event=>{
       event.preventDefault();if(busy)return;
