@@ -98,44 +98,63 @@
     const galleryId = root.dataset.galleryId;
     const list = root.querySelector('[data-comment-list]');
     const form = root.querySelector('[data-comment-form]');
+    let replying = null, busy = false;
+    const replyBar = document.createElement('div'); replyBar.className = 'cas-reply-bar'; replyBar.hidden = true;
+    const replyLabel = document.createElement('span');
+    const cancel = document.createElement('button'); cancel.type='button';cancel.textContent='取消回复';
+    replyBar.append(replyLabel,cancel);form.prepend(replyBar);
+    cancel.onclick=()=>{replying=null;replyBar.hidden=true;};
     async function load() {
-      try {
-        const { data } = await api(`/api/galleries/${galleryId}/comments`);
-        list.replaceChildren();
-        if (!data.length) {
-          const empty = document.createElement('div'); empty.className = 'comment-empty'; empty.textContent = '还没有留言。你可以写下第一条补充。'; list.append(empty); return;
+      const {data} = await api(`/api/galleries/${galleryId}/comments`);
+      const byId = new Map(data.map(c=>[c.id,c]));
+      const rootId = comment => {const seen=new Set();while(comment.parentId && byId.has(comment.parentId) && !seen.has(comment.id)){seen.add(comment.id);comment=byId.get(comment.parentId);}return comment.id;};
+      list.replaceChildren();
+      if(!data.length){const empty=document.createElement('div');empty.className='comment-empty';empty.textContent='还没有留言。你可以写下第一条补充。';list.append(empty);return;}
+      function item(comment, nested=false){
+        const article=document.createElement('article');article.id=`comment-${comment.id}`;article.className=`comment-item ${nested?'cas-comment-reply':''}`;
+        const header=document.createElement('header'),author=document.createElement('strong'),time=document.createElement('time'),content=document.createElement('p');
+        if(comment.authorAvatarUrl){const avatar=document.createElement('span');avatar.className='comment-author-avatar';const image=document.createElement('img');image.src=comment.authorAvatarUrl;image.alt='';image.onerror=()=>image.remove();avatar.append(image);header.append(avatar);}
+        author.textContent=comment.author;time.textContent=formatDate(comment.createdAt);header.append(author,time);
+        const parent=byId.get(comment.parentId);
+        if(parent){const label=document.createElement('small');label.textContent=`回复 @${parent.author}`;header.append(label);}
+        content.textContent=comment.status==='hidden'?'该留言正在复核':comment.status==='deleted'?'该留言已删除':comment.content;
+        article.append(header,content);
+        if(comment.status==='visible'){
+          const reply=document.createElement('button');reply.type='button';reply.className='button button-ghost';reply.textContent='回复';
+          reply.onclick=()=>{if(!account){window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`);return;}replying=comment.id;replyLabel.textContent=`回复 @${comment.author}`;replyBar.hidden=false;form.elements.content.focus();};
+          article.append(reply);
         }
-        data.forEach((comment) => {
-          const item = document.createElement('article'); item.className = 'comment-item';
-          const header = document.createElement('header'); const author = document.createElement('strong'); const time = document.createElement('time'); const content = document.createElement('p');
-          if (comment.authorAvatarUrl) {
-            const avatar = document.createElement('span'); avatar.className = 'comment-author-avatar'; avatar.textContent = comment.author.trim().slice(0, 1).toUpperCase();
-            const image = document.createElement('img'); image.src = comment.authorAvatarUrl; image.alt = ''; image.addEventListener('error', () => image.remove(), { once: true });
-            avatar.append(image); header.append(avatar);
-          }
-          author.textContent = comment.author; time.textContent = formatDate(comment.createdAt); content.textContent = comment.content;
-          header.append(author, time); item.append(header, content); list.append(item);
-        });
-      } catch (error) { toast(error.message, true); }
-    }
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (!account) { window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`); return; }
-      const content = form.elements.content.value.trim(); if (!content) return;
-      const button = form.querySelector('button[type="submit"]'); button.disabled = true;
-      try {
-        const turnstileToken = form.querySelector('[name="cf-turnstile-response"]')?.value;
-        if (!turnstileToken) throw new Error('请完成人机验证');
-        await api(`/api/galleries/${galleryId}/comments`, {
-          method: 'POST', body: JSON.stringify({ content, turnstileToken }),
-        });
-        form.reset(); toast('留言已发布'); await load();
+        return article;
       }
-      catch (error) { if (error.status === 401) window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`); else toast(error.message, true); }
-      finally { window.turnstile?.reset(); button.disabled = false; }
+      const groups=new Map();data.forEach(c=>{const id=rootId(c);if(!groups.has(id))groups.set(id,[]);groups.get(id).push(c);});
+      groups.forEach((comments,id)=>{const thread=document.createElement('section');thread.className='cas-comment-thread';const parent=byId.get(id);if(parent)thread.append(item(parent));comments.filter(c=>c.id!==id).forEach(c=>thread.append(item(c,true)));list.append(thread);});
+      if(replying && (!byId.has(replying)||byId.get(replying).status!=='visible')){replyLabel.textContent='原留言正在复核或已删除；回复草稿已保留';}
+    }
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();if(busy)return;
+      if(!account){window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`);return;}
+      const content=form.elements.content.value.trim();if(!content)return;
+      const button=form.querySelector('button[type="submit"]');button.disabled=true;busy=true;
+      try{
+        const turnstileToken=form.querySelector('[name="cf-turnstile-response"]')?.value;
+        if(!turnstileToken)throw new Error('请完成人机验证');
+        await api(`/api/galleries/${galleryId}/comments`,{method:'POST',body:JSON.stringify({content,parentId:replying,turnstileToken})});
+        form.reset();replying=null;replyBar.hidden=true;toast('留言已发布');await load();
+      }catch(error){if(error.status===401)window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`);else toast(error.message,true);}
+      finally{window.turnstile?.reset();button.disabled=false;busy=false;}
     });
-    await load();
+    await load().catch(error=>toast(error.message,true));
+    window.setInterval(async()=>{if(document.hidden||busy)return;busy=true;try{await load();}catch{/* Retain the composer on polling failure. */}finally{busy=false;}},10000);
   }
+
+  async function refreshSystemBadge(){
+    if(!account)return;
+    const link=document.querySelector('[data-system-link]'),badge=document.querySelector('[data-system-badge]');
+    link?.classList.remove('is-hidden');
+    try{const counts=await api('/api/message-center/unread-count');if(badge){badge.textContent=counts.system>99?'99+':String(counts.system);badge.hidden=!counts.system;}}catch{/* Notifications remain accessible. */}
+  }
+  window.addEventListener('casSystemMessagesRead',refreshSystemBadge);
+  window.setInterval(()=>{if(!document.hidden)refreshSystemBadge();},10000);
 
   function initGalleryViewer() {
     const page = document.querySelector('[data-gallery-page]'); const dialog = document.querySelector('[data-gallery-lightbox]');
@@ -177,6 +196,7 @@
 
   refreshAccount().then((user) => {
     initComments();
+    refreshSystemBadge();
     if (window.location.pathname === '/login') return;
     if (user) {
       window.sessionStorage.removeItem('cas-sso-probe');

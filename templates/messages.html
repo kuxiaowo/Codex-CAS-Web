@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}系统消息 · {{ site.siteName }}{% endblock %}
+{% block content %}
+<section class="mod-messages"><p class="eyebrow">MESSAGE CENTER</p><h1>系统消息</h1><p>查看评论和回复的处理通知。</p><div data-system-notifications></div><button class="button button-ghost" data-system-more hidden>加载更多</button></section>
+{% endblock %}
+{% block scripts %}<script src="/static/js/system-messages.js?v=moderation1" defer></script>{% endblock %}

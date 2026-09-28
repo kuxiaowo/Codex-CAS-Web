@@ -351,11 +351,7 @@
             await loadComments();
           } catch (error) { toast(error.message, true); }
         }),
-        button('删除', 'button-danger', () => removeWithConfirmation(
-          '确定永久删除这条留言及其回复吗？',
-          `/api/admin/comments/${comment.id}`,
-          async () => { await Promise.all([loadComments(), loadDashboard()]); },
-        )),
+        button('删除', 'button-danger', () => window.NetHubModeration.deleteComment(comment.id, async () => { await Promise.all([loadComments(), loadDashboard()]); }).catch(error => toast(error.message, true))),
       ],
     )));
   }

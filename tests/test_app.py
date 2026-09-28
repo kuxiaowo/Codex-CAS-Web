@@ -201,7 +201,7 @@ class AppTest(unittest.TestCase):
             "data-picker-current", "data-settings-form", "data-export",
         ):
             self.assertIn(control, response.text)
-        self.assertIn("/static/js/admin.js?v=auth-return2", response.text)
+        self.assertIn("/static/js/admin.js?v=moderation-20260928", response.text)
         self.assertGreaterEqual(response.text.count('type="button" value="cancel"'), 2)
         self.assertGreaterEqual(response.text.count("data-dialog-close"), 2)
 
@@ -324,6 +324,36 @@ class AppTest(unittest.TestCase):
         payload["status"] = "draft"
         accepted = self.client.post("/api/admin/galleries", headers=self.admin_headers(), json=payload)
         self.assertEqual(accepted.status_code, 201, accepted.text)
+
+    def test_moderation_hides_preserves_replies_and_sends_body_free_notice(self):
+        from app.moderation import site
+        gallery = self.create_gallery("moderation")
+        created = self.client.post(f"/api/galleries/{gallery['id']}/comments", json={"content":"审核测试原文", "turnstileToken":"test"})
+        self.assertEqual(created.status_code, 201, created.text)
+        ident=created.json()["data"]["id"]
+        reply = self.client.post(f"/api/galleries/{gallery['id']}/comments", json={"content":"正常回复", "parentId":ident, "turnstileToken":"test"})
+        self.assertEqual(reply.status_code, 201, reply.text)
+        # Claim order can contain an older test's durable jobs. Locate this exact one.
+        job = site.claim(1,180)
+        while job and job["commentId"] != ident:
+            site.complete(job,{"jobId":job["jobId"],"decision":"allow","categories":[],"evidence":[],"explanation":"正常"})
+            job = site.claim(1,180)
+        self.assertIsNotNone(job)
+        site.complete(job,{"jobId":job["jobId"],"decision":"review","categories":["spam"],"evidence":["审核测试原文"],"explanation":"测试命中"})
+        comments = self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
+        self.assertEqual(next(c for c in comments if c["id"]==ident)["content"],"")
+        self.assertEqual(next(c for c in comments if c["id"]==ident)["status"],"hidden")
+        invalid = self.client.post(f"/api/admin/moderation/cases/{job['id']}/decision",json={"action":"delete","reasons":["other"]})
+        self.assertEqual(invalid.status_code,422)
+        deleted = self.client.post(f"/api/admin/moderation/cases/{job['id']}/decision",json={"action":"delete","reasons":["privacy"]})
+        self.assertEqual(deleted.status_code,200,deleted.text)
+        self.client.post(f"/api/admin/moderation/cases/{job['id']}/decision",json={"action":"delete","reasons":["privacy"]})
+        notice=self.client.get("/api/system-notifications").json()
+        self.assertNotIn("审核测试原文",str(notice))
+        self.assertEqual(len([n for n in notice["data"] if n["commentId"]==ident]),1)
+        self.assertEqual(self.client.get("/messages").status_code,200)
+        comments=self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
+        self.assertEqual(len(comments),2)
 
     def test_comments_use_gallery_relation(self) -> None:
         gallery = self.create_gallery("comments")

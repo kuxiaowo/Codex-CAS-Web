@@ -8,6 +8,7 @@
   <title>{% block title %}{{ site.siteName }}{% endblock %}</title>
   <link rel="icon" href="/static/favicon.png" type="image/png" sizes="64x64">
   <link rel="stylesheet" href="/static/css/styles.css?v=footer-nethub1">
+  <link rel="stylesheet" href="/static/css/moderation.css?v=moderation1">
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -50,6 +51,10 @@
           <small>{{ category.galleryCount }}</small>
         </a>
       {% endfor %}
+      <a class="side-link is-hidden" href="/messages" data-system-link>
+        <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 6l8 6 8-6"/></svg></span>
+        <span>系统消息</span><small data-system-badge hidden>0</small>
+      </a>
       <a class="side-link is-hidden" href="/admin" data-admin-link>
         <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9l8-5 8 5v10M9 19v-6h6v6"/></svg></span>
         <span>管理后台</span>
@@ -101,7 +106,8 @@
   </footer>
 
   <div class="toast-region" aria-live="polite" aria-atomic="true" data-toast-region></div>
-  <script src="/static/js/app.js?v=turnstile1" defer></script>
+  <script src="/static/js/app.js?v=moderation-20260928" defer></script>
+  <script src="/static/js/moderation-ui.js?v=moderation1" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
