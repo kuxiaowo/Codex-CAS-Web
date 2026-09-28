@@ -124,6 +124,11 @@
           reply.onclick=()=>{if(!account){window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`);return;}replying=comment.id;replyLabel.textContent=`回复 @${comment.author}`;replyBar.hidden=false;form.elements.content.focus();};
           article.append(reply);
         }
+        if(comment.status!=='deleted' && account?.id===comment.userId){
+          const remove=document.createElement('button');remove.type='button';remove.className='button button-ghost';remove.textContent='删除';
+          remove.onclick=async()=>{if(busy || !window.confirm('确认删除自己的留言？正常回复会保留。'))return;busy=true;try{await api(`/api/comments/${comment.id}`,{method:'DELETE'});await load();}catch(error){toast(error.message,true);}finally{busy=false;}};
+          article.append(remove);
+        }
         return article;
       }
       const groups=new Map();data.forEach(c=>{const id=rootId(c);if(!groups.has(id))groups.set(id,[]);groups.get(id).push(c);});

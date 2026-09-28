@@ -692,6 +692,18 @@ def create_comment(
     return {"data": {"id": comment_id, "moderationStatus": "pending"}}
 
 
+@app.delete("/api/comments/{comment_id}", status_code=204)
+def author_delete_comment(comment_id: int, user: Annotated[dict, Depends(current_user)]):
+    with transaction(immediate=True) as connection:
+        comment = connection.execute("SELECT user_id FROM comments WHERE id=?", (comment_id,)).fetchone()
+        if comment is None:
+            raise HTTPException(404, "留言不存在")
+        if comment["user_id"] != user["id"]:
+            raise HTTPException(403, "只能删除自己的留言")
+        moderation_site.cancel(connection, comment_id)
+        connection.execute("UPDATE comments SET content='',status='deleted' WHERE id=?", (comment_id,))
+
+
 @app.get("/api/admin/dashboard")
 def admin_dashboard(_: Annotated[dict, Depends(admin_user)]):
     connection = connect()

@@ -325,6 +325,28 @@ class AppTest(unittest.TestCase):
         accepted = self.client.post("/api/admin/galleries", headers=self.admin_headers(), json=payload)
         self.assertEqual(accepted.status_code, 201, accepted.text)
 
+    def test_author_withdrawal_cancels_late_review_without_notification(self):
+        from app.moderation import site
+        gallery = self.create_gallery("author-withdrawal")
+        root = self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"作者准备撤回的内容","turnstileToken":"test"}).json()['data']['id']
+        reply = self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"保留回复","parentId":root,"turnstileToken":"test"}).json()['data']['id']
+        job = site.claim(1,180)
+        while job and job['commentId'] != root:
+            site.complete(job,{'jobId':job['jobId'],'decision':'allow','categories':[],'evidence':[],'explanation':'正常'})
+            job = site.claim(1,180)
+        self.assertIsNotNone(job)
+        self.assertEqual(self.client.delete(f'/api/comments/{root}').status_code,204)
+        self.assertFalse(site.complete(job,{'jobId':job['jobId'],'decision':'review','categories':['spam'],'evidence':['作者准备撤回的内容'],'explanation':'迟到结果'}))
+        self.assertEqual(self.client.delete(f'/api/comments/{root}').status_code,204)
+        comments = self.client.get(f"/api/galleries/{gallery['id']}/comments").json()['data']
+        self.assertEqual(next(c for c in comments if c['id']==root)['content'],'')
+        self.assertEqual(next(c for c in comments if c['id']==reply)['parentId'],root)
+        self.assertFalse(any(n['commentId']==root for n in self.client.get('/api/system-notifications').json()['data']))
+        with self.database.transaction() as connection:
+            other = connection.execute("INSERT INTO users(username,display_name,role,created_at) VALUES('other-withdrawal','其他作者','user','now')").lastrowid
+            ident = connection.execute("INSERT INTO comments(gallery_id,user_id,content,created_at) VALUES(?,?,'其他作者内容','now')",(gallery['id'],other)).lastrowid
+        self.assertEqual(self.client.delete(f'/api/comments/{ident}').status_code,403)
+
     def test_moderation_hides_preserves_replies_and_sends_body_free_notice(self):
         from app.moderation import site
         gallery = self.create_gallery("moderation")
