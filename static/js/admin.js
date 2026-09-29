@@ -84,6 +84,7 @@
     root.querySelectorAll('[data-view-panel]').forEach((panel) => {
       panel.classList.toggle('is-active', panel.dataset.viewPanel === name);
     });
+    if(name==='comments')Promise.all([loadComments(),loadCommentReports()]).catch(error=>toast(error.message,true));
   }
 
   function openDialog({ title: titleValue, eyebrow, body, onSave }) {
@@ -356,6 +357,17 @@
     )));
   }
 
+  async function loadCommentReports() {
+    const {data}=await api('/api/admin/comment-reports');
+    const container=root.querySelector('[data-comment-reports-list]');
+    if(!data.length)return empty(container,'暂无待处理举报。');
+    container.replaceChildren(...data.map(report=>row(
+      report.content || '正文已隐藏或删除',
+      [report.galleryTitle,`作者：${report.author}`,`举报人：${report.reporter}`,`理由：${report.reason}`,formatDate(report.createdAt)],
+      [button('删除内容','button-danger',()=>window.NetHubModeration.deleteComment(report.commentId,async()=>{await Promise.all([loadCommentReports(),loadComments(),loadDashboard()]);}).catch(error=>toast(error.message,true)))],
+    )));
+  }
+
   async function loadUsers() {
     const { data } = await api('/api/admin/users');
     state.users = data;
@@ -610,7 +622,7 @@
       initEvents();
       await Promise.all([
         loadDashboard(), loadCategories(), loadGalleries(), loadAnnouncements(),
-        loadComments(), loadUsers(), loadSettings(), loadFiles(),
+        loadComments(), loadCommentReports(), loadUsers(), loadSettings(), loadFiles(),
       ]);
       root.querySelector('[data-admin-gate]').classList.add('is-hidden');
       root.querySelector('[data-admin-workspace]').classList.remove('is-hidden');

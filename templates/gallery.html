@@ -30,6 +30,7 @@
   {% endif %}
   <section class="comments" data-comments data-gallery-id="{{ gallery.id }}">
     <div class="section-heading compact-heading"><div><p class="eyebrow">讨论</p><h2>补充这份图集</h2></div></div>
+    <div class="comment-sort" role="group" aria-label="留言排序"><button type="button" data-comment-sort="hot">热门</button><button type="button" data-comment-sort="latest">最新</button><span data-comment-total></span></div>
     <form class="comment-form" data-comment-form>
       <label for="comment-content">留言内容</label>
       <textarea id="comment-content" name="content" rows="4" maxlength="1000" placeholder="写下你的补充或疑问……" required></textarea>
@@ -37,6 +38,7 @@
       <div class="form-actions"><small>需要登录后留言</small><button class="button button-primary" type="submit">发布留言</button></div>
     </form>
     <div class="comment-list" data-comment-list></div>
+    <button type="button" class="button button-ghost" data-comment-more hidden>加载更多</button>
   </section>
 </div>
 <dialog class="gallery-lightbox" data-gallery-lightbox aria-label="图片查看器">

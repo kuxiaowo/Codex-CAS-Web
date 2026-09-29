@@ -120,6 +120,75 @@ class GalleryAssetTest(unittest.TestCase):
 
 
 class DatabaseMigrationTest(unittest.TestCase):
+    def test_v5_to_v6_backfills_nested_reply_roots(self) -> None:
+        connection = sqlite3.connect(':memory:')
+        connection.executescript("""
+            PRAGMA foreign_keys=ON;
+            CREATE TABLE users(id INTEGER PRIMARY KEY);
+            CREATE TABLE galleries(id INTEGER PRIMARY KEY);
+            CREATE TABLE comments(id INTEGER PRIMARY KEY,gallery_id INTEGER REFERENCES galleries(id),user_id INTEGER REFERENCES users(id),parent_id INTEGER REFERENCES comments(id),content TEXT,status TEXT,created_at TEXT);
+            CREATE TABLE local_sessions(id INTEGER PRIMARY KEY);
+            INSERT INTO users VALUES(1),(2),(3);
+            INSERT INTO galleries VALUES(1);
+            INSERT INTO comments VALUES(10,1,1,NULL,'root','visible','now'),(11,1,2,10,'reply','visible','now'),(12,1,3,11,'nested','visible','now');
+            PRAGMA user_version=5;
+        """)
+        connection.executescript(database.MIGRATE_V5_TO_V6)
+        self.assertEqual(connection.execute('SELECT id,root_id,reply_to_user_id FROM comments ORDER BY id').fetchall(),[(10,10,None),(11,10,1),(12,10,2)])
+        self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(),[])
+        self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0],6)
+        connection.close()
+
+    def test_offline_comment_migration_keeps_backup_and_refreshes_capture(self) -> None:
+        from scripts import d1_mirror, migrate_comment_interactions
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path, backup = Path(temp_dir) / 'cas.db', Path(temp_dir) / 'before.db'
+            connection = sqlite3.connect(path)
+            connection.executescript("""
+                PRAGMA foreign_keys=ON;
+                CREATE TABLE users(id INTEGER PRIMARY KEY);
+                CREATE TABLE galleries(id INTEGER PRIMARY KEY);
+                CREATE TABLE comments(id INTEGER PRIMARY KEY,gallery_id INTEGER REFERENCES galleries(id),user_id INTEGER REFERENCES users(id),parent_id INTEGER REFERENCES comments(id),content TEXT,status TEXT,created_at TEXT);
+                CREATE TABLE local_sessions(id INTEGER PRIMARY KEY);
+                INSERT INTO users VALUES(1);
+                INSERT INTO galleries VALUES(1);
+                INSERT INTO comments VALUES(1,1,1,NULL,'old','visible','now');
+                PRAGMA user_version=5;
+            """)
+            connection.close()
+            d1_mirror.install(path)
+            result = migrate_comment_interactions.migrate(path, backup)
+            self.assertEqual(result['version'],6)
+            self.assertTrue(result['mirrorDisarmed'])
+            self.assertTrue(backup.exists())
+            old = sqlite3.connect(backup)
+            self.assertEqual(old.execute('PRAGMA user_version').fetchone()[0],5)
+            old.close()
+            new = sqlite3.connect(path)
+            self.assertEqual(new.execute('SELECT root_id FROM comments WHERE id=1').fetchone()[0],1)
+            self.assertTrue({'comment_likes','comment_reports','comment_notifications'}.issubset(d1_mirror.tables(new)))
+            d1_mirror.verify_capture(new)
+            self.assertEqual(new.execute('SELECT ready FROM _sync_control WHERE id=1').fetchone()[0],0)
+            self.assertEqual(new.execute('PRAGMA foreign_key_check').fetchall(),[])
+            new.close()
+
+    def test_d1_comment_ddl_matches_new_business_tables(self) -> None:
+        connection=sqlite3.connect(':memory:')
+        connection.executescript("""
+            CREATE TABLE users(id INTEGER PRIMARY KEY);
+            CREATE TABLE galleries(id INTEGER PRIMARY KEY);
+            CREATE TABLE comments(id INTEGER PRIMARY KEY,gallery_id INTEGER,user_id INTEGER,parent_id INTEGER,content TEXT,status TEXT,created_at TEXT);
+            CREATE TABLE local_sessions(id INTEGER PRIMARY KEY);
+            INSERT INTO users VALUES(1);
+            INSERT INTO galleries VALUES(1);
+            INSERT INTO comments VALUES(1,1,1,NULL,'existing','visible','now');
+        """)
+        ddl=Path(__file__).resolve().parents[1] / 'sql' / 'd1' / '006_comment_interactions.sql'
+        connection.executescript(ddl.read_text(encoding='utf-8'))
+        self.assertEqual(connection.execute('SELECT root_id FROM comments WHERE id=1').fetchone()[0],1)
+        self.assertTrue({'comment_likes','comment_reports','comment_notifications'}.issubset({row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}))
+        connection.close()
+
     def test_legacy_default_site_name_is_renamed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "legacy-name.db"
@@ -163,10 +232,11 @@ class DatabaseMigrationTest(unittest.TestCase):
                     connection.execute("DROP TABLE oidc_logout_events")
                     connection.execute("PRAGMA user_version = 3")
 
-                database.initialize_database()
+                with database.transaction() as connection:
+                    connection.executescript(database.MIGRATE_V3_TO_V4)
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 5)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 4)
                     states = dict(
                         migrated.execute("SELECT username, is_active FROM users").fetchall()
                     )
@@ -213,7 +283,7 @@ class DatabaseMigrationTest(unittest.TestCase):
                 database.initialize_database()
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 5)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 6)
                     self.assertEqual(migrated.execute("SELECT username FROM users").fetchone()[0], "admin")
                     self.assertEqual(migrated.execute("SELECT password_hash FROM users").fetchone()[0], "")
                     self.assertEqual(migrated.execute("SELECT is_active FROM users").fetchone()[0], 0)

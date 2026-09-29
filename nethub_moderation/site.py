@@ -292,7 +292,7 @@ class Site:
                 comment["id"],
             ),
         )
-        if self.name == "wiki":
+        if self.name in {"wiki", "cas"}:
             conn.execute(
                 "UPDATE comment_reports SET status='resolved',resolved_by=?,resolved_at=CURRENT_TIMESTAMP WHERE comment_id=? AND status='pending'",
                 (admin, comment["id"]),
