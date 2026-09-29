@@ -38,6 +38,19 @@
     return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '';
   }
 
+  function formatCommentTime(value) {
+    if (!value) return '';
+    const text = String(value).trim();
+    const utc = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
+      ? `${text.replace(' ', 'T')}Z` : text;
+    const date = new Date(utc);
+    if (!Number.isFinite(date.getTime())) return '';
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(date);
+  }
+
   async function refreshAccount() {
     const name = document.querySelector('[data-account-name]');
     const role = document.querySelector('[data-account-role]');
@@ -118,7 +131,7 @@
         const main=document.createElement('div');main.className='comment-main';
         const header=document.createElement('header'),author=document.createElement('strong'),time=document.createElement('time'),content=document.createElement('p'),actions=document.createElement('div');
         header.className='comment-author-line';content.className='comment-content';actions.className='comment-actions';
-        author.textContent=comment.author;time.dateTime=comment.createdAt;time.textContent=formatDate(comment.createdAt);header.append(author,time);
+        author.textContent=comment.author;time.dateTime=comment.createdAt;time.title='北京时间';time.textContent=formatCommentTime(comment.createdAt);header.append(author,time);
         const parent=byId.get(comment.parentId);
         if(parent && comment.status==='visible'){
           const label=document.createElement('span');label.className='comment-reply-to';label.textContent=`回复 @${parent.author}：`;
