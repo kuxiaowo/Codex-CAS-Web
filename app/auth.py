@@ -361,7 +361,7 @@ def current_user(request: Request) -> dict:
             connection.execute("DELETE FROM local_sessions WHERE id = ?", (user["session_id"],))
     if not user or user["expires_at"] <= utc_now() or not user["is_active"]:
         raise HTTPException(status_code=401, detail="登录状态无效或已过期")
-    user.pop("session_id", None)
+    request.state.session_id = user.pop("session_id", None)
     user.pop("expires_at", None)
     request.state.analytics_user_sub = user.get("auth_sub")
     return user

@@ -1,5 +1,7 @@
 # 评论审核
 
+Codex 画廊评论互动与举报的后续 v6 迁移见 [COMMENT_INTERACTIONS.md](COMMENT_INTERACTIONS.md)；本文下述 CAS v4 → v5 是首次上线审核时的迁移记录。
+
 Wiki 与 CAS 继续由 SQLite 提供在线读写。新评论与 `_moderation_jobs` 在同一事务保存，响应后的 BackgroundTasks 回调使任务可领取。中断的派发回调在 30 秒后恢复；运行中的任务使用超时加 60 秒的租约。AI 只隐藏，不自动删除或处罚账号。
 
 独立的 `nethub_moderation.service` 在 `127.0.0.1:3500` 运行。两站通过各自管理员权限代理共享配置，审核服务公平领取两站内部任务，总并发默认 2。内部接口同时要求 loopback 客户端与至少 32 字符的 `MODERATION_TOKEN`。Caddy 必须拒绝 `/internal/moderation/*`，该端口不得对外开放。

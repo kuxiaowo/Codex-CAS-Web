@@ -10,3 +10,4 @@
 
 .cas-reply-bar{display:flex;gap:12px;align-items:center;padding:10px;background:#f0eff8;border-radius:8px}.cas-reply-bar[hidden]{display:none}.mod-messages{max-width:960px;margin:0 auto;padding:20px}.mod-messages .mod-notification{border-radius:14px}
 [data-system-more][hidden],[data-system-badge][hidden]{display:none}.mod-messages,.mod-dialog,[data-moderation-app]{--primary:var(--violet);--surface:var(--panel-solid)}
+.comment-sort{display:flex;align-items:center;gap:8px;margin:14px 0}.comment-sort button{border:1px solid var(--line);border-radius:8px;background:var(--panel-solid);padding:8px 14px;cursor:pointer}.comment-sort button.is-active{border-color:var(--violet);color:var(--violet)}.comment-item.comment-focused{outline:2px solid var(--violet);outline-offset:3px}[data-comment-more]{margin:12px 0}.comment-item>button{margin:10px 8px 0 0}.mod-messages h2{margin:28px 0 12px;font-size:18px}
