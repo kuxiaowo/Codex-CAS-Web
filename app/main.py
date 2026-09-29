@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 import sqlite3
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated
@@ -58,6 +59,9 @@ from app.schemas import (
     UserUpdateInput,
 )
 from app.turnstile import verify_turnstile
+
+TURNSTILE_SESSION_WINDOW_SECONDS = 60 * 60
+_turnstile_verified_until: dict[int, float] = {}
 from app.moderation import site as moderation_site, router as moderation_router
 from nethub_moderation.site import enqueue
 
@@ -618,7 +622,10 @@ def create_comment(
     background_tasks: BackgroundTasks,
     user: Annotated[dict, Depends(current_user)],
 ):
-    verify_turnstile(payload.turnstile_token, "comment")
+    verified_until = _turnstile_verified_until.get(int(user["id"]), 0)
+    if verified_until <= time.time():
+        verify_turnstile(payload.turnstile_token, "comment")
+        _turnstile_verified_until[int(user["id"])] = time.time() + TURNSTILE_SESSION_WINDOW_SECONDS
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=422, detail="留言不能为空")
