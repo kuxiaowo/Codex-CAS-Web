@@ -215,6 +215,7 @@ DEFAULT_SETTINGS = {
     "site_name": "Note Gallery",
     "site_tagline": "一个简单的笔记集合站。",
     "comment_per_minute": "8",
+    "comments_enabled": "1",
 }
 
 def utc_now() -> str:

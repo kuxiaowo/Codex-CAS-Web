@@ -413,6 +413,7 @@ def gallery_detail(request: Request, gallery_id: int, background_tasks: Backgrou
                 raise HTTPException(status_code=404, detail="图集不存在")
             site = _site_context(connection)
             categories = _categories(connection)
+        comments_enabled = get_setting(connection, "comments_enabled", "1") == "1"
     finally:
         connection.close()
 
@@ -423,6 +424,7 @@ def gallery_detail(request: Request, gallery_id: int, background_tasks: Backgrou
         "site": site,
         "categories": categories,
         "gallery": gallery,
+        "comments_enabled": comments_enabled,
         "turnstile_site_key": settings.turnstile_site_key,
     }
     return templates.TemplateResponse(request, "gallery.html", context)
@@ -675,6 +677,8 @@ def create_comment(
         raise HTTPException(status_code=422, detail="留言不能为空")
     session_id = request.state.session_id
     with transaction() as session_connection:
+        if get_setting(session_connection, "comments_enabled", "1") != "1":
+            raise HTTPException(status_code=403, detail="评论功能暂时关闭")
         session = session_connection.execute("SELECT turnstile_verified_at FROM local_sessions WHERE id=?", (session_id,)).fetchone()
     verified = bool(session and session["turnstile_verified_at"] is not None and int(session["turnstile_verified_at"]) > int(time.time()) - 3600)
     if not verified:
@@ -682,6 +686,8 @@ def create_comment(
     connection = connect()
     if isinstance(connection, D1GatewayAdapter):
         try:
+            if get_setting(connection, "comments_enabled", "1") != "1":
+                raise HTTPException(status_code=403, detail="评论功能暂时关闭")
             limit = int(get_setting(connection, "comment_per_minute", "8"))
             threshold = (datetime.now(UTC) - timedelta(seconds=60)).isoformat(timespec="seconds")
             row = connection.execute(
@@ -722,6 +728,8 @@ def create_comment(
             connection.close()
     connection.close()
     with transaction() as connection:
+        if get_setting(connection, "comments_enabled", "1") != "1":
+            raise HTTPException(status_code=403, detail="评论功能暂时关闭")
         gallery = connection.execute(
             "SELECT id FROM galleries WHERE id = ? AND status = 'published'", (gallery_id,)
         ).fetchone()

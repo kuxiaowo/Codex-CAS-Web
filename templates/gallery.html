@@ -28,6 +28,7 @@
   {% else %}
   <div class="empty-state compact-empty"><h2>这个图集暂时没有可显示的图片</h2><p>资源目录可能已被移动，或图片格式无法识别。</p></div>
   {% endif %}
+  {% if comments_enabled %}
   <section class="comments" data-comments data-gallery-id="{{ gallery.id }}">
     <div class="section-heading compact-heading"><div><p class="eyebrow">讨论</p><h2>补充这份图集</h2></div></div>
     <div class="comment-sort" role="group" aria-label="留言排序"><button type="button" data-comment-sort="hot">热门</button><button type="button" data-comment-sort="latest">最新</button><span data-comment-total></span></div>
@@ -40,6 +41,9 @@
     <div class="comment-list" data-comment-list></div>
     <button type="button" class="button button-ghost" data-comment-more hidden>加载更多</button>
   </section>
+  {% else %}
+  <section class="comments"><p>评论功能暂时关闭。</p></section>
+  {% endif %}
 </div>
 <dialog class="gallery-lightbox" data-gallery-lightbox aria-label="图片查看器">
   <button class="lightbox-close" type="button" data-lightbox-close aria-label="关闭">×</button>

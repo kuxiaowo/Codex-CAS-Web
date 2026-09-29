@@ -377,6 +377,41 @@ class AppTest(unittest.TestCase):
         comments=self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
         self.assertEqual(len(comments),2)
 
+    def test_comments_can_be_temporarily_closed_and_reopened(self) -> None:
+        from fastapi.testclient import TestClient
+        from app.auth import SESSION_COOKIE, create_local_session
+
+        gallery = self.create_gallery("comments-toggle")
+        with self.database.transaction() as connection:
+            user_id = connection.execute("INSERT INTO users(username,display_name,auth_sub,role,created_at) VALUES('toggle-admin','管理员','toggle-admin-sub','admin','now')").lastrowid
+        client = TestClient(self.main.app)
+        client.cookies.set(SESSION_COOKIE, create_local_session({"id": user_id, "auth_sub": "toggle-admin-sub"}, "toggle-sid"))
+        endpoint = f"/api/galleries/{gallery['id']}/comments"
+        payload = {"content": "已有留言", "turnstileToken": "test"}
+        created = client.post(endpoint, json=payload)
+        self.assertEqual(created.status_code, 201, created.text)
+        comment_id = created.json()["data"]["id"]
+        with self.database.transaction() as connection:
+            connection.execute("UPDATE settings SET value='0' WHERE key='comments_enabled'")
+        try:
+            page = self.client.get(f"/galleries/{gallery['id']}")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("评论功能暂时关闭", page.text)
+            self.assertNotIn("data-comment-form", page.text)
+            for parent_id in (None, comment_id):
+                blocked = client.post(endpoint, json={**payload, "parentId": parent_id})
+                self.assertEqual(blocked.status_code, 403, blocked.text)
+                self.assertEqual(blocked.json()["detail"], "评论功能暂时关闭")
+            comments = self.client.get(endpoint).json()["data"]
+            self.assertEqual(len(comments), 1)
+            self.assertEqual(comments[0]["content"], "已有留言")
+        finally:
+            with self.database.transaction() as connection:
+                connection.execute("UPDATE settings SET value='1' WHERE key='comments_enabled'")
+        self.assertIn("data-comment-form", self.client.get(f"/galleries/{gallery['id']}").text)
+        reopened = client.post(endpoint, json={**payload, "parentId": comment_id})
+        self.assertEqual(reopened.status_code, 201, reopened.text)
+
     def test_comments_use_gallery_relation(self) -> None:
         gallery = self.create_gallery("comments")
         with self.database.transaction() as connection:

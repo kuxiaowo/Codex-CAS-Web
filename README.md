@@ -81,6 +81,10 @@ JSON 导入导出格式为 v2，只包含资源相对路径，不包含图片文
 
 媒体 Worker 的部署、Secret 和冻结协议见 `cloudflare/nethub-codex-media-gateway/README.md`。应用管理接口负责登录、管理员权限、同源 CSRF、扩展名、图片内容与大小校验；浏览器不会接触内部 HMAC Secret。
 
+## 临时关闭评论
+
+将数据库 `settings` 表的 `comments_enabled` 设为 `0`，图集页会隐藏留言表单，后端拒绝新留言和回复（包括管理员）。设为 `1` 即可恢复，无需重启；已有留言数据保留。
+
 ## 测试
 
 ```powershell
