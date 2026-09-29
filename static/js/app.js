@@ -38,6 +38,19 @@
     return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '';
   }
 
+  function formatCommentTime(value) {
+    if (!value) return '';
+    const text = String(value).trim();
+    const utc = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
+      ? `${text.replace(' ', 'T')}Z` : text;
+    const date = new Date(utc);
+    if (!Number.isFinite(date.getTime())) return '';
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(date);
+  }
+
   async function refreshAccount() {
     const name = document.querySelector('[data-account-name]');
     const role = document.querySelector('[data-account-role]');
@@ -113,27 +126,33 @@
       if(!data.length){const empty=document.createElement('div');empty.className='comment-empty';empty.textContent='还没有留言。你可以写下第一条补充。';list.append(empty);return;}
       function item(comment, nested=false){
         const article=document.createElement('article');article.id=`comment-${comment.id}`;article.className=`comment-item ${nested?'cas-comment-reply':''}`;
-        const header=document.createElement('header'),author=document.createElement('strong'),time=document.createElement('time'),content=document.createElement('p');
-        if(comment.authorAvatarUrl){const avatar=document.createElement('span');avatar.className='comment-author-avatar';const image=document.createElement('img');image.src=comment.authorAvatarUrl;image.alt='';image.onerror=()=>image.remove();avatar.append(image);header.append(avatar);}
-        author.textContent=comment.author;time.textContent=formatDate(comment.createdAt);header.append(author,time);
+        const avatar=document.createElement('span');avatar.className='comment-author-avatar';avatar.textContent=(comment.author||'?').trim().slice(0,1).toUpperCase();
+        if(comment.authorAvatarUrl){const image=document.createElement('img');image.src=comment.authorAvatarUrl;image.alt='';image.onerror=()=>image.remove();avatar.append(image);}
+        const main=document.createElement('div');main.className='comment-main';
+        const header=document.createElement('header'),author=document.createElement('strong'),time=document.createElement('time'),content=document.createElement('p'),actions=document.createElement('div');
+        header.className='comment-author-line';content.className='comment-content';actions.className='comment-actions';
+        author.textContent=comment.author;time.dateTime=comment.createdAt;time.title='北京时间';time.textContent=formatCommentTime(comment.createdAt);header.append(author,time);
         const parent=byId.get(comment.parentId);
-        if(parent){const label=document.createElement('small');label.textContent=`回复 @${parent.author}`;header.append(label);}
-        content.textContent=comment.status==='hidden'?'该留言正在复核':comment.status==='deleted'?'该留言已删除':comment.content;
-        article.append(header,content);
+        if(parent && comment.status==='visible'){
+          const label=document.createElement('span');label.className='comment-reply-to';label.textContent=`回复 @${parent.author}：`;
+          content.append(label);
+        }
+        content.append(document.createTextNode(comment.status==='hidden'?'该留言正在复核':comment.status==='deleted'?'该留言已删除':comment.content));
+        main.append(header,content,actions);article.append(avatar,main);
         if(comment.status==='visible'){
-          const reply=document.createElement('button');reply.type='button';reply.className='button button-ghost';reply.textContent='回复';
+          const reply=document.createElement('button');reply.type='button';reply.textContent='回复';
           reply.onclick=()=>{if(!account){window.location.assign(`/login?next=${encodeURIComponent(currentReturnPath())}`);return;}replying=comment.id;replyLabel.textContent=`回复 @${comment.author}`;replyBar.hidden=false;form.elements.content.focus();};
-          article.append(reply);
+          actions.append(reply);
         }
         if(comment.status!=='deleted' && account?.id===comment.userId){
-          const remove=document.createElement('button');remove.type='button';remove.className='button button-ghost';remove.textContent='删除';
+          const remove=document.createElement('button');remove.type='button';remove.textContent='删除';
           remove.onclick=async()=>{if(busy || !window.confirm('确认删除自己的留言？正常回复会保留。'))return;busy=true;try{await api(`/api/comments/${comment.id}`,{method:'DELETE'});await load();}catch(error){toast(error.message,true);}finally{busy=false;}};
-          article.append(remove);
+          actions.append(remove);
         }
         return article;
       }
       const groups=new Map();data.forEach(c=>{const id=rootId(c);if(!groups.has(id))groups.set(id,[]);groups.get(id).push(c);});
-      groups.forEach((comments,id)=>{const thread=document.createElement('section');thread.className='cas-comment-thread';const parent=byId.get(id);if(parent)thread.append(item(parent));comments.filter(c=>c.id!==id).forEach(c=>thread.append(item(c,true)));list.append(thread);});
+      groups.forEach((comments,id)=>{const thread=document.createElement('section');thread.className='cas-comment-thread';const parent=byId.get(id);if(parent)thread.append(item(parent));const replies=comments.filter(c=>c.id!==id);if(replies.length){const replyList=document.createElement('div');replyList.className='cas-comment-replies';replies.forEach(c=>replyList.append(item(c,true)));thread.append(replyList);}list.append(thread);});
     }
     form.addEventListener('submit',async event=>{
       event.preventDefault();if(busy)return;
