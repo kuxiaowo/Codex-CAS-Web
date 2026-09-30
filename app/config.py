@@ -163,9 +163,9 @@ def validate_runtime_settings() -> None:
         not settings.turnstile_site_key or not settings.turnstile_secret_key
     ):
         raise RuntimeError("生产环境必须配置 TURNSTILE_SITE_KEY 和 TURNSTILE_SECRET_KEY")
-    backend = settings.database_backend or ("d1" if settings.app_environment == "production" else "sqlite")
-    if backend not in {"sqlite", "d1"}:
-        raise RuntimeError("DATABASE_BACKEND 必须是 sqlite 或 d1")
+    backend = settings.database_backend or "sqlite"
+    if backend != "sqlite":
+        raise RuntimeError("DATABASE_BACKEND 必须是 sqlite")
     if backend == "d1":
         parsed_d1 = urlsplit(settings.d1_gateway_url)
         if parsed_d1.scheme != "https" or not parsed_d1.netloc:

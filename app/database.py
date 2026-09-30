@@ -223,7 +223,7 @@ def utc_now() -> str:
 
 
 def _backend_name() -> str:
-    return settings.database_backend or ("d1" if settings.app_environment == "production" else "sqlite")
+    return settings.database_backend or "sqlite"
 
 
 class D1DatabaseError(RuntimeError):
