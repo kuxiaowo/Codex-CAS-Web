@@ -17,7 +17,6 @@ from typing import Any, Iterator, Sequence
 from app.config import database_path, settings
 
 
-from nethub_moderation.site import SCHEMA as MODERATION_SCHEMA
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -66,17 +65,6 @@ CREATE TABLE IF NOT EXISTS announcements (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
-  root_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
-  reply_to_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  content TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'visible' CHECK (status IN ('visible', 'hidden', 'deleted')),
-  created_at TEXT NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -99,8 +87,7 @@ CREATE TABLE IF NOT EXISTS local_sessions (
   oidc_sid TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  turnstile_verified_at INTEGER
+  expires_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS oidc_login_states (
@@ -122,20 +109,12 @@ CREATE TABLE IF NOT EXISTS oidc_logout_events (
 CREATE INDEX IF NOT EXISTS idx_galleries_category_status ON galleries(category_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_resource_dir_nocase
   ON galleries(resource_dir COLLATE NOCASE);
-CREATE INDEX IF NOT EXISTS idx_comments_gallery_status ON comments(gallery_id, status);
-CREATE INDEX IF NOT EXISTS idx_comments_gallery_roots ON comments(gallery_id, parent_id, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_comments_root ON comments(root_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_auth_attempts_lookup ON auth_attempts(action, subject, created_at);
 CREATE INDEX IF NOT EXISTS idx_local_sessions_user ON local_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_local_sessions_subject ON local_sessions(auth_sub, oidc_sid);
 CREATE INDEX IF NOT EXISTS idx_oidc_login_states_expires ON oidc_login_states(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_logout_events_expires ON oidc_logout_events(expires_at);
-CREATE TABLE IF NOT EXISTS comment_likes (comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(comment_id,user_id));
-CREATE TABLE IF NOT EXISTS comment_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE, reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','resolved','dismissed')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, resolved_at TEXT, resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL, UNIQUE(comment_id,reporter_id));
-CREATE INDEX IF NOT EXISTS idx_comment_reports_status ON comment_reports(status,created_at,id);
-CREATE TABLE IF NOT EXISTS comment_notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN ('reply','like')), recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, comment_id INTEGER NOT NULL, gallery_id INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, read_at TEXT, UNIQUE(kind,recipient_id,actor_id,comment_id));
-CREATE INDEX IF NOT EXISTS idx_comment_notifications_recipient ON comment_notifications(recipient_id,kind,id DESC);
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 """
 
 MIGRATE_V1_TO_V2 = """
@@ -214,8 +193,6 @@ PRAGMA user_version = 4;
 DEFAULT_SETTINGS = {
     "site_name": "Note Gallery",
     "site_tagline": "一个简单的笔记集合站。",
-    "comment_per_minute": "8",
-    "comments_enabled": "1",
 }
 
 def utc_now() -> str:
@@ -360,28 +337,16 @@ def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection | D1G
         connection.close()
 
 
-from nethub_moderation.migration import CAS_MIGRATION as MIGRATE_V4_TO_V5
-
-MIGRATE_V5_TO_V6 = """
-ALTER TABLE comments ADD COLUMN root_id INTEGER REFERENCES comments(id) ON DELETE CASCADE;
-ALTER TABLE comments ADD COLUMN reply_to_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
-ALTER TABLE local_sessions ADD COLUMN turnstile_verified_at INTEGER;
-WITH RECURSIVE roots(id,root_id) AS (
- SELECT id,id FROM comments WHERE parent_id IS NULL
- UNION ALL SELECT c.id,r.root_id FROM comments c JOIN roots r ON c.parent_id=r.id
-) UPDATE comments SET root_id=(SELECT root_id FROM roots WHERE roots.id=comments.id);
-UPDATE comments SET reply_to_user_id=(SELECT user_id FROM comments p WHERE p.id=comments.parent_id) WHERE parent_id IS NOT NULL;
-CREATE INDEX idx_comments_gallery_roots ON comments(gallery_id,parent_id,created_at DESC,id DESC);
-CREATE INDEX idx_comments_root ON comments(root_id,created_at,id);
-CREATE TABLE comment_likes (comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(comment_id,user_id));
-CREATE TABLE comment_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE, reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','resolved','dismissed')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, resolved_at TEXT, resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL, UNIQUE(comment_id,reporter_id));
-CREATE INDEX idx_comment_reports_status ON comment_reports(status,created_at,id);
-CREATE TABLE comment_notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN ('reply','like')), recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, comment_id INTEGER NOT NULL, gallery_id INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, read_at TEXT, UNIQUE(kind,recipient_id,actor_id,comment_id));
-CREATE INDEX idx_comment_notifications_recipient ON comment_notifications(recipient_id,kind,id DESC);
-PRAGMA user_version=6;
+MIGRATE_REMOVE_COMMENTS = """
+DROP TABLE IF EXISTS _moderation_jobs;
+DROP TABLE IF EXISTS system_notifications;
+DROP TABLE IF EXISTS comment_notifications;
+DROP TABLE IF EXISTS comment_reports;
+DROP TABLE IF EXISTS comment_likes;
+DROP TABLE IF EXISTS comments;
+DELETE FROM settings WHERE key IN ('comments_enabled','comment_per_minute');
+PRAGMA user_version=7;
 """
-
-SCHEMA += MODERATION_SCHEMA
 
 
 def initialize_database() -> None:
@@ -390,35 +355,24 @@ def initialize_database() -> None:
         return
     with transaction() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in range(8):
+            raise RuntimeError(f"不支持的数据库版本：{version}")
+        if version and version < 7 and connection.execute("SELECT 1 FROM sqlite_master WHERE name='_sync_control'").fetchone():
+            raise RuntimeError("已启用镜像的数据库须离线运行评论移除迁移")
         if version == 1:
             connection.executescript(MIGRATE_V1_TO_V2)
+        if version in {1, 2}:
             connection.executescript(MIGRATE_V2_TO_V3)
+        if version in {1, 2, 3}:
             connection.executescript(MIGRATE_V3_TO_V4)
-        elif version == 0:
+        if version == 0:
             connection.executescript(SCHEMA)
-        elif version == 2:
-            connection.executescript(MIGRATE_V2_TO_V3)
-            connection.executescript(MIGRATE_V3_TO_V4)
-        elif version == 3:
-            connection.executescript(MIGRATE_V3_TO_V4)
-        elif version == 4:
-            connection.executescript(MIGRATE_V4_TO_V5)
-        elif version == 5:
-            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='_sync_control'").fetchone():
-                raise RuntimeError("已启用 D1 镜像的数据库须离线运行评论 v6 迁移")
-            connection.executescript(MIGRATE_V5_TO_V6)
-        elif version != 6:
-            raise RuntimeError(f"不支持的数据库版本：{version}")
-        else:
-            connection.executescript(SCHEMA)
-        if connection.execute("PRAGMA user_version").fetchone()[0] == 4:
-            connection.executescript(MIGRATE_V4_TO_V5)
-        if connection.execute("PRAGMA user_version").fetchone()[0] == 5:
-            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='_sync_control'").fetchone():
-                raise RuntimeError("已启用 D1 镜像的数据库须离线运行评论 v6 迁移")
-            connection.executescript(MIGRATE_V5_TO_V6)
+        elif version < 7:
+            connection.executescript(MIGRATE_REMOVE_COMMENTS)
+            if any(row[1] == "turnstile_verified_at" for row in connection.execute("PRAGMA table_info(local_sessions)")):
+                connection.execute("ALTER TABLE local_sessions DROP COLUMN turnstile_verified_at")
         if connection.execute("PRAGMA foreign_key_check").fetchone():
-            raise RuntimeError("评论审核迁移后外键检查失败")
+            raise RuntimeError("数据库外键检查失败")
         now = utc_now()
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(

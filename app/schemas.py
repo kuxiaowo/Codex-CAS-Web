@@ -14,12 +14,6 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True)
 
 
-class CommentInput(ApiModel):
-    content: str = Field(min_length=1, max_length=1000)
-    parent_id: int | None = None
-    turnstile_token: str = Field(default="", max_length=2048)
-
-
 class CategoryInput(ApiModel):
     name: str = Field(min_length=1, max_length=50)
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,49}$")
@@ -53,4 +47,3 @@ class UserUpdateInput(ApiModel):
 class SettingsInput(ApiModel):
     site_name: str = Field(min_length=1, max_length=50)
     site_tagline: str = Field(min_length=1, max_length=160)
-    comment_per_minute: int = Field(ge=1, le=1000)

@@ -81,9 +81,11 @@ JSON 导入导出格式为 v2，只包含资源相对路径，不包含图片文
 
 媒体 Worker 的部署、Secret 和冻结协议见 `cloudflare/nethub-codex-media-gateway/README.md`。应用管理接口负责登录、管理员权限、同源 CSRF、扩展名、图片内容与大小校验；浏览器不会接触内部 HMAC Secret。
 
-## 临时关闭评论
+## 账号与内容治理
 
-将数据库 `settings` 表的 `comments_enabled` 设为 `0`，图集页会隐藏留言表单，后端拒绝新留言和回复（包括管理员）。设为 `1` 即可恢复，无需重启；已有留言数据保留。
+图集站永久移除评论、点赞、举报、评论通知、消息中心及评论审核接口。SQLite 升级至 v7；旧数据库先备份，再执行 `python -m scripts.remove_comments --db <数据库> --backup <新备份路径>`。已启用 D1 镜像时还须指定经过核验的 `--mirror-module <d1_mirror.py>`，先停止应用与镜像交付，迁移后保持交付关闭，应用 `sql/d1/007_remove_comments.sql` 并按镜像流程重建、核验基线后恢复。迁移备份仅限管理员访问，30 天后按运维流程删除。
+
+受保护操作每次请求查询 NetHub Accounts 的中央账号状态；账号中心不可用时返回 503，中央封禁会撤销本站会话。公开图集和媒体可继续匿名访问。
 
 ## 测试
 

@@ -25,11 +25,9 @@
       <button type="button" data-admin-view="categories">栏目</button>
       <button type="button" data-admin-view="files">资源文件</button>
       <button type="button" data-admin-view="announcements">公告</button>
-      <button type="button" data-admin-view="moderation">评论审核</button>
-      <button type="button" data-admin-view="comments">留言</button>
       <button type="button" data-admin-view="users">用户</button>
       <button type="button" data-admin-view="transfer">数据迁移</button>
-      <button type="button" data-admin-view="settings">访问限制</button>
+      <button type="button" data-admin-view="settings">站点设置</button>
     </nav>
 
     <section class="admin-view is-active" data-view-panel="dashboard">
@@ -72,12 +70,6 @@
       <div class="admin-list" data-announcements-list></div>
     </section>
 
-    <section class="admin-view" data-view-panel="moderation"><div data-moderation-app></div></section>
-    <section class="admin-view" data-view-panel="comments">
-      <div class="admin-section-title"><div><small>MODERATION</small><h2>留言审核</h2></div></div>
-      <h3>待处理举报</h3><div class="admin-list" data-comment-reports-list></div>
-      <div class="admin-list" data-comments-list></div>
-    </section>
 
     <section class="admin-view" data-view-panel="users">
       <div class="admin-section-title"><div><small>ACCOUNTS</small><h2>本站成员</h2></div></div>
@@ -93,10 +85,9 @@
     </section>
 
     <section class="admin-view" data-view-panel="settings">
-      <div class="admin-section-title"><div><small>POLICY</small><h2>站点与访问限制</h2></div></div>
+      <div class="admin-section-title"><div><small>POLICY</small><h2>站点与站点设置</h2></div></div>
       <form class="admin-form settings-form" data-settings-form>
         <div class="field-grid two"><label>站点名称<input name="siteName" required maxlength="50"></label><label>站点标语<input name="siteTagline" required maxlength="160"></label></div>
-        <div class="field-grid"><label>每用户每分钟留言次数<input name="commentPerMinute" type="number" min="1" max="1000" required></label></div>
         <button class="button button-primary" type="submit">保存设置</button>
       </form>
     </section>
@@ -121,4 +112,4 @@
   </dialog>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/admin.js?v=moderation-20260928" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/js/admin.js?v=governance-20261001" defer></script>{% endblock %}

@@ -45,12 +45,15 @@ class OidcAuthTest(unittest.TestCase):
         cls.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         cls.jwks = JsonWebKey.import_key(cls.key, {"kty": "RSA", "kid": "test-key"}).as_dict(is_private=False)
         from fastapi.testclient import TestClient
+        cls.status_patch = patch("nethub_status.read_account_status", return_value={"active": True, "emailVerified": True})
+        cls.status_patch.start()
         cls.client = TestClient(cls.main.app)
         cls.client.__enter__()
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.client.__exit__(None, None, None)
+        cls.status_patch.stop()
         cls.temp_dir.cleanup()
 
     def token(self, sub: str, nonce: str, sid: str = "central-sid") -> str:
