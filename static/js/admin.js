@@ -9,7 +9,6 @@
     categories: [],
     galleries: [],
     announcements: [],
-    comments: [],
     users: [],
     settings: null,
     filePath: '',
@@ -84,7 +83,6 @@
     root.querySelectorAll('[data-view-panel]').forEach((panel) => {
       panel.classList.toggle('is-active', panel.dataset.viewPanel === name);
     });
-    if(name==='comments')Promise.all([loadComments(),loadCommentReports()]).catch(error=>toast(error.message,true));
   }
 
   function openDialog({ title: titleValue, eyebrow, body, onSave }) {
@@ -163,7 +161,6 @@
       ['全部图集', data.counts.galleries],
       ['已发布', data.counts.publishedGalleries],
       ['注册用户', data.counts.users],
-      ['留言', data.counts.comments],
       ['累计查看', data.counts.views],
     ];
     stats.replaceChildren(...items.map(([label, value]) => {
@@ -332,40 +329,6 @@
         await loadAnnouncements();
       },
     });
-  }
-
-  async function loadComments() {
-    const { data } = await api('/api/admin/comments');
-    state.comments = data;
-    const container = root.querySelector('[data-comments-list]');
-    if (!data.length) return empty(container, '还没有留言。');
-    container.replaceChildren(...data.map((comment) => row(
-      comment.content,
-      [comment.status, comment.author, comment.galleryTitle, formatDate(comment.createdAt)],
-      [
-        button(comment.status === 'visible' ? '隐藏' : '恢复', 'button-ghost', async () => {
-          try {
-            await api(`/api/admin/comments/${comment.id}`, {
-              method: 'PATCH', body: JSON.stringify({ status: comment.status === 'visible' ? 'hidden' : 'visible' }),
-            });
-            toast('留言状态已更新');
-            await loadComments();
-          } catch (error) { toast(error.message, true); }
-        }),
-        button('删除', 'button-danger', () => window.NetHubModeration.deleteComment(comment.id, async () => { await Promise.all([loadComments(), loadDashboard()]); }).catch(error => toast(error.message, true))),
-      ],
-    )));
-  }
-
-  async function loadCommentReports() {
-    const {data}=await api('/api/admin/comment-reports');
-    const container=root.querySelector('[data-comment-reports-list]');
-    if(!data.length)return empty(container,'暂无待处理举报。');
-    container.replaceChildren(...data.map(report=>row(
-      report.content || '正文已隐藏或删除',
-      [report.galleryTitle,`作者：${report.author}`,`举报人：${report.reporter}`,`理由：${report.reason}`,formatDate(report.createdAt)],
-      [button('删除内容','button-danger',()=>window.NetHubModeration.deleteComment(report.commentId,async()=>{await Promise.all([loadCommentReports(),loadComments(),loadDashboard()]);}).catch(error=>toast(error.message,true)))],
-    )));
   }
 
   async function loadUsers() {
@@ -578,7 +541,6 @@
         await api('/api/admin/settings', {
           method: 'PATCH', body: JSON.stringify({
             site_name: values.siteName, site_tagline: values.siteTagline,
-            comment_per_minute: Number(values.commentPerMinute),
           }),
         });
         toast('设置已保存，刷新页面后更新站点名称');
@@ -622,7 +584,7 @@
       initEvents();
       await Promise.all([
         loadDashboard(), loadCategories(), loadGalleries(), loadAnnouncements(),
-        loadComments(), loadCommentReports(), loadUsers(), loadSettings(), loadFiles(),
+        loadUsers(), loadSettings(), loadFiles(),
       ]);
       root.querySelector('[data-admin-gate]').classList.add('is-hidden');
       root.querySelector('[data-admin-workspace]').classList.remove('is-hidden');

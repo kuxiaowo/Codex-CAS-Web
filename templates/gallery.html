@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ gallery.title }} · {{ site.siteName }}{% endblock %}
-{% block head %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{% endblock %}
 
 {% block content %}
 <div class="gallery-reading-shell" data-gallery-page data-gallery-id="{{ gallery.id }}" data-next-cursor="{{ gallery.imagesNextCursor or '' }}" data-has-more="{{ 'true' if gallery.imagesHasMore else 'false' }}" data-image-count="{{ gallery.imageCount }}">
@@ -28,22 +27,7 @@
   {% else %}
   <div class="empty-state compact-empty"><h2>这个图集暂时没有可显示的图片</h2><p>资源目录可能已被移动，或图片格式无法识别。</p></div>
   {% endif %}
-  {% if comments_enabled %}
-  <section class="comments" data-comments data-gallery-id="{{ gallery.id }}">
-    <div class="section-heading compact-heading"><div><p class="eyebrow">讨论</p><h2>补充这份图集</h2></div></div>
-    <div class="comment-sort" role="group" aria-label="留言排序"><button type="button" data-comment-sort="hot">热门</button><button type="button" data-comment-sort="latest">最新</button><span data-comment-total></span></div>
-    <form class="comment-form" data-comment-form>
-      <label for="comment-content">留言内容</label>
-      <textarea id="comment-content" name="content" rows="4" maxlength="1000" placeholder="写下你的补充或疑问……" required></textarea>
-      <div class="cf-turnstile" data-sitekey="{{ turnstile_site_key }}" data-action="comment"></div>
-      <div class="form-actions"><small>需要登录后留言</small><button class="button button-primary" type="submit">发布留言</button></div>
-    </form>
-    <div class="comment-list" data-comment-list></div>
-    <button type="button" class="button button-ghost" data-comment-more hidden>加载更多</button>
-  </section>
-  {% else %}
-  <section class="comments"><p>评论功能暂时关闭。</p></section>
-  {% endif %}
+
 </div>
 <dialog class="gallery-lightbox" data-gallery-lightbox aria-label="图片查看器">
   <button class="lightbox-close" type="button" data-lightbox-close aria-label="关闭">×</button>

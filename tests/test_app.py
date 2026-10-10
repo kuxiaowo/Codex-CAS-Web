@@ -49,10 +49,10 @@ class AppTest(unittest.TestCase):
         app.media_storage._storage_instance = app.media_storage.LocalMediaStorage(cls.resource_dir)
         cls.assets_patch = patch.object(app.gallery_assets, "RESOURCE_DIR", cls.resource_dir)
         cls.main_resource_patch = patch.object(app.main, "RESOURCE_DIR", cls.resource_dir)
-        cls.turnstile_patch = patch.object(app.main, "verify_turnstile")
+        cls.status_patch = patch("nethub_status.read_account_status", return_value={"active": True, "emailVerified": True})
         cls.assets_patch.start()
         cls.main_resource_patch.start()
-        cls.turnstile_patch.start()
+        cls.status_patch.start()
         from fastapi.testclient import TestClient
 
         cls.main = app.main
@@ -72,7 +72,7 @@ class AppTest(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.client.__exit__(None, None, None)
         cls.main_resource_patch.stop()
-        cls.turnstile_patch.stop()
+        cls.status_patch.stop()
         cls.assets_patch.stop()
         import app.media_storage
         app.media_storage.reset_media_storage_for_tests()
@@ -201,7 +201,7 @@ class AppTest(unittest.TestCase):
             "data-picker-current", "data-settings-form", "data-export",
         ):
             self.assertIn(control, response.text)
-        self.assertIn("/static/js/admin.js?v=moderation-20260928", response.text)
+        self.assertIn("/static/js/admin.js?v=governance-20261001", response.text)
         self.assertGreaterEqual(response.text.count('type="button" value="cancel"'), 2)
         self.assertGreaterEqual(response.text.count("data-dialog-close"), 2)
 
@@ -325,211 +325,13 @@ class AppTest(unittest.TestCase):
         accepted = self.client.post("/api/admin/galleries", headers=self.admin_headers(), json=payload)
         self.assertEqual(accepted.status_code, 201, accepted.text)
 
-    def test_author_withdrawal_cancels_late_review_without_notification(self):
-        from app.moderation import site
-        gallery = self.create_gallery("author-withdrawal")
-        root = self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"作者准备撤回的内容","turnstileToken":"test"}).json()['data']['id']
-        reply = self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"保留回复","parentId":root,"turnstileToken":"test"}).json()['data']['id']
-        job = site.claim(1,180)
-        while job and job['commentId'] != root:
-            site.complete(job,{'jobId':job['jobId'],'decision':'allow','categories':[],'evidence':[],'explanation':'正常'})
-            job = site.claim(1,180)
-        self.assertIsNotNone(job)
-        self.assertEqual(self.client.delete(f'/api/comments/{root}').status_code,204)
-        self.assertFalse(site.complete(job,{'jobId':job['jobId'],'decision':'review','categories':['spam'],'evidence':['作者准备撤回的内容'],'explanation':'迟到结果'}))
-        self.assertEqual(self.client.delete(f'/api/comments/{root}').status_code,204)
-        comments = self.client.get(f"/api/galleries/{gallery['id']}/comments").json()['data']
-        self.assertEqual(next(c for c in comments if c['id']==root)['content'],'')
-        self.assertEqual(next(c for c in comments if c['id']==reply)['parentId'],root)
-        self.assertFalse(any(n['commentId']==root for n in self.client.get('/api/system-notifications').json()['data']))
-        with self.database.transaction() as connection:
-            other = connection.execute("INSERT INTO users(username,display_name,role,created_at) VALUES('other-withdrawal','其他作者','user','now')").lastrowid
-            ident = connection.execute("INSERT INTO comments(gallery_id,user_id,content,created_at) VALUES(?,?,'其他作者内容','now')",(gallery['id'],other)).lastrowid
-        self.assertEqual(self.client.delete(f'/api/comments/{ident}').status_code,403)
 
-    def test_moderation_hides_preserves_replies_and_sends_body_free_notice(self):
-        from app.moderation import site
-        gallery = self.create_gallery("moderation")
-        created = self.client.post(f"/api/galleries/{gallery['id']}/comments", json={"content":"审核测试原文", "turnstileToken":"test"})
-        self.assertEqual(created.status_code, 201, created.text)
-        ident=created.json()["data"]["id"]
-        reply = self.client.post(f"/api/galleries/{gallery['id']}/comments", json={"content":"正常回复", "parentId":ident, "turnstileToken":"test"})
-        self.assertEqual(reply.status_code, 201, reply.text)
-        # Claim order can contain an older test's durable jobs. Locate this exact one.
-        job = site.claim(1,180)
-        while job and job["commentId"] != ident:
-            site.complete(job,{"jobId":job["jobId"],"decision":"allow","categories":[],"evidence":[],"explanation":"正常"})
-            job = site.claim(1,180)
-        self.assertIsNotNone(job)
-        site.complete(job,{"jobId":job["jobId"],"decision":"review","categories":["spam"],"evidence":["审核测试原文"],"explanation":"测试命中"})
-        comments = self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
-        self.assertEqual(next(c for c in comments if c["id"]==ident)["content"],"")
-        self.assertEqual(next(c for c in comments if c["id"]==ident)["status"],"hidden")
-        invalid = self.client.post(f"/api/admin/moderation/cases/{job['id']}/decision",json={"action":"delete","reasons":["other"]})
-        self.assertEqual(invalid.status_code,422)
-        deleted = self.client.post(f"/api/admin/moderation/cases/{job['id']}/decision",json={"action":"delete","reasons":["privacy"]})
-        self.assertEqual(deleted.status_code,200,deleted.text)
-        self.client.post(f"/api/admin/moderation/cases/{job['id']}/decision",json={"action":"delete","reasons":["privacy"]})
-        notice=self.client.get("/api/system-notifications").json()
-        self.assertNotIn("审核测试原文",str(notice))
-        self.assertEqual(len([n for n in notice["data"] if n["commentId"]==ident]),1)
-        self.assertEqual(self.client.get("/messages").status_code,200)
-        comments=self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
-        self.assertEqual(len(comments),2)
 
-    def test_comments_can_be_temporarily_closed_and_reopened(self) -> None:
-        from fastapi.testclient import TestClient
-        from app.auth import SESSION_COOKIE, create_local_session
 
-        gallery = self.create_gallery("comments-toggle")
-        with self.database.transaction() as connection:
-            user_id = connection.execute("INSERT INTO users(username,display_name,auth_sub,role,created_at) VALUES('toggle-admin','管理员','toggle-admin-sub','admin','now')").lastrowid
-        client = TestClient(self.main.app)
-        client.cookies.set(SESSION_COOKIE, create_local_session({"id": user_id, "auth_sub": "toggle-admin-sub"}, "toggle-sid"))
-        endpoint = f"/api/galleries/{gallery['id']}/comments"
-        payload = {"content": "已有留言", "turnstileToken": "test"}
-        created = client.post(endpoint, json=payload)
-        self.assertEqual(created.status_code, 201, created.text)
-        comment_id = created.json()["data"]["id"]
-        with self.database.transaction() as connection:
-            connection.execute("UPDATE settings SET value='0' WHERE key='comments_enabled'")
-        try:
-            page = self.client.get(f"/galleries/{gallery['id']}")
-            self.assertEqual(page.status_code, 200)
-            self.assertIn("评论功能暂时关闭", page.text)
-            self.assertNotIn("data-comment-form", page.text)
-            for parent_id in (None, comment_id):
-                blocked = client.post(endpoint, json={**payload, "parentId": parent_id})
-                self.assertEqual(blocked.status_code, 403, blocked.text)
-                self.assertEqual(blocked.json()["detail"], "评论功能暂时关闭")
-            comments = self.client.get(endpoint).json()["data"]
-            self.assertEqual(len(comments), 1)
-            self.assertEqual(comments[0]["content"], "已有留言")
-        finally:
-            with self.database.transaction() as connection:
-                connection.execute("UPDATE settings SET value='1' WHERE key='comments_enabled'")
-        self.assertIn("data-comment-form", self.client.get(f"/galleries/{gallery['id']}").text)
-        reopened = client.post(endpoint, json={**payload, "parentId": comment_id})
-        self.assertEqual(reopened.status_code, 201, reopened.text)
 
-    def test_comments_use_gallery_relation(self) -> None:
-        gallery = self.create_gallery("comments")
-        with self.database.transaction() as connection:
-            cursor = connection.execute(
-                """INSERT INTO users (username, display_name, password_hash, auth_sub, role, is_active, created_at)
-                   VALUES ('reader', '读者', '', 'test-reader-sub', 'user', 1, 'now')"""
-            )
-        from app.auth import create_local_session, SESSION_COOKIE
-        original_cookie = self.client.cookies.get(SESSION_COOKIE)
-        self.client.cookies.set(SESSION_COOKIE, create_local_session({"id": cursor.lastrowid, "auth_sub": "test-reader-sub"}, "reader-sid"))
-        posted = self.client.post(
-            f"/api/galleries/{gallery['id']}/comments",
-            json={"content": "这份图集很清楚。", "turnstileToken": "test-token"},
-        )
-        self.client.cookies.set(SESSION_COOKIE, original_cookie)
-        self.assertEqual(posted.status_code, 201, posted.text)
-        comments = self.client.get(f"/api/galleries/{gallery['id']}/comments").json()["data"]
-        self.assertEqual(comments[0]["content"], "这份图集很清楚。")
 
-    def test_comment_interactions_reports_notifications_and_redaction(self) -> None:
-        from fastapi.testclient import TestClient
-        from app.auth import SESSION_COOKIE, create_local_session
 
-        gallery = self.create_gallery("comment-interactions")
-        with self.database.transaction() as connection:
-            other_id = connection.execute("INSERT INTO users(username,display_name,password_hash,auth_sub,role,is_active,created_at) VALUES('comment-other','其他用户','','comment-other-sub','user',1,'now')").lastrowid
-        other = TestClient(self.main.app)
-        other.cookies.set(SESSION_COOKIE, create_local_session({"id":other_id,"auth_sub":"comment-other-sub"},"other-sid"))
-        root = self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"根留言","turnstileToken":"test"}).json()["data"]["id"]
-        reply = other.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"回复内容","parentId":root,"turnstileToken":"test"}).json()["data"]["id"]
-        self.assertEqual(self.client.get('/api/message-center/unread-count').json()['replies'],1)
-        self.assertEqual(self.client.get('/api/comment-notifications?kind=reply').json()['data'][0]['commentId'],reply)
-        self.assertEqual(other.post(f'/api/comments/{root}/like').json()['likeCount'],1)
-        self.assertEqual(other.post(f'/api/comments/{root}/like').json()['likeCount'],1)
-        self.assertEqual(self.client.get('/api/message-center/unread-count').json()['likes'],1)
-        self.assertEqual(other.post(f'/api/comments/{root}/reports',json={"reason":"不当内容","turnstileToken":"test"}).status_code,200)
-        self.assertEqual(other.post(f'/api/comments/{root}/reports',json={"reason":"新的理由","turnstileToken":"test"}).status_code,200)
-        self.assertEqual(other.post(f'/api/comments/{reply}/reports',json={"reason":"自己","turnstileToken":"test"}).status_code,422)
-        reports=self.client.get('/api/admin/comment-reports').json()['data']
-        self.assertEqual(len([r for r in reports if r['commentId']==root]),1)
-        self.assertEqual(next(r for r in reports if r['commentId']==root)['reason'],'新的理由')
-        page=self.client.get(f"/api/galleries/{gallery['id']}/comments?sort=hot&pageSize=10").json()
-        self.assertEqual(page['total'],2)
-        self.assertTrue(next(c for c in page['data'] if c['id']==root)['liked'] is False)
-        self.assertEqual(other.get(f'/api/comments/{reply}/context').json()['galleryId'],gallery['id'])
-        report_id=next(r for r in reports if r['commentId']==root)['id']
-        deleted=self.client.request('DELETE',f'/api/admin/comment-reports/{report_id}/content',json={"reasons":["spam"],"note":""})
-        self.assertEqual(deleted.status_code,200,deleted.text)
-        self.assertFalse(any(r['commentId']==root for r in self.client.get('/api/admin/comment-reports').json()['data']))
-        after=self.client.get(f"/api/galleries/{gallery['id']}/comments").json()['data']
-        self.assertEqual(next(c for c in after if c['id']==root)['content'],'')
-        self.assertEqual(next(c for c in after if c['id']==reply)['content'],'回复内容')
-        like_notice=self.client.get('/api/comment-notifications?kind=like').json()['data'][0]
-        self.assertEqual(like_notice['content'],'')
-        self.assertIsNone(like_notice['url'])
 
-    def test_comment_verification_window_is_fixed(self) -> None:
-        from unittest.mock import patch
-        import time
-        gallery=self.create_gallery('comment-window')
-        with self.database.transaction() as connection:
-            connection.execute('UPDATE local_sessions SET turnstile_verified_at=? WHERE user_id=?',(int(time.time())-3599,self.admin_id))
-        self.assertTrue(self.client.get('/api/turnstile/comment-config').json()['sessionVerified'])
-        with patch.object(self.main,'verify_turnstile') as verify:
-            response=self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"窗口内","turnstileToken":""})
-            self.assertEqual(response.status_code,201,response.text)
-            verify.assert_not_called()
-        with self.database.transaction() as connection:
-            connection.execute('UPDATE local_sessions SET turnstile_verified_at=? WHERE user_id=?',(int(time.time())-3600,self.admin_id))
-        self.assertFalse(self.client.get('/api/turnstile/comment-config').json()['sessionVerified'])
-        with patch.object(self.main,'verify_turnstile') as verify:
-            response=self.client.post(f"/api/galleries/{gallery['id']}/comments",json={"content":"窗口外","turnstileToken":"new-token"})
-            self.assertEqual(response.status_code,201,response.text)
-            verify.assert_called_once_with('new-token','comment')
-        self.assertTrue(self.client.get('/api/turnstile/comment-config').json()['sessionVerified'])
-
-    def test_comment_pagination_preserves_visible_descendants(self) -> None:
-        gallery=self.create_gallery('comment-pages')
-        with self.database.transaction() as connection:
-            roots=[]
-            for index in range(12):
-                ident=connection.execute('INSERT INTO comments(gallery_id,user_id,content,status,created_at) VALUES(?,?,?,?,?)',(gallery['id'],self.admin_id,f'root-{index}','visible',f'2026-01-01T00:{index:02d}:00+00:00')).lastrowid
-                connection.execute('UPDATE comments SET root_id=? WHERE id=?',(ident,ident))
-                roots.append(ident)
-            reply=connection.execute('INSERT INTO comments(gallery_id,user_id,parent_id,root_id,reply_to_user_id,content,status,created_at) VALUES(?,?,?,?,?,?,?,?)',(gallery['id'],self.admin_id,roots[0],roots[0],self.admin_id,'visible-child','visible','2026-01-01T01:00:00+00:00')).lastrowid
-            connection.execute("UPDATE comments SET status='deleted',content='' WHERE id=?",(roots[0],))
-            connection.execute("UPDATE comments SET status='hidden' WHERE id=?",(roots[1],))
-        latest=self.client.get(f"/api/galleries/{gallery['id']}/comments?sort=latest&pageSize=5").json()
-        self.assertEqual(latest['total'],11)
-        self.assertTrue(latest['hasMore'])
-        self.assertEqual(len(latest['data']),5)
-        third=self.client.get(f"/api/galleries/{gallery['id']}/comments?sort=latest&page=3&pageSize=5").json()
-        self.assertTrue(any(item['id']==reply for item in third['data']))
-        deleted_root=next(item for item in third['data'] if item['id']==roots[0])
-        self.assertEqual(deleted_root['content'],'')
-        self.assertFalse(any(item['id']==roots[1] for item in latest['data']+third['data']))
-        self.assertEqual(self.client.get(f'/api/comments/{roots[1]}/context').status_code,404)
-
-    def test_comment_notice_read_and_admin_reports_are_isolated(self) -> None:
-        from fastapi.testclient import TestClient
-        from app.auth import SESSION_COOKIE, create_local_session
-        gallery=self.create_gallery('comment-isolation')
-        with self.database.transaction() as connection:
-            other_id=connection.execute("INSERT INTO users(username,display_name,password_hash,auth_sub,role,is_active,created_at) VALUES('comment-isolated','Other','','comment-isolated-sub','user',1,'now')").lastrowid
-        other=TestClient(self.main.app)
-        other.cookies.set(SESSION_COOKIE,create_local_session({'id':other_id,'auth_sub':'comment-isolated-sub'},'other-sid'))
-        before_total=self.client.get('/api/comment-notifications?kind=reply').json()['total']
-        before_unread=self.client.get('/api/message-center/unread-count').json()['replies']
-        root=self.client.post(f"/api/galleries/{gallery['id']}/comments",json={'content':'root','turnstileToken':'test'}).json()['data']['id']
-        other.post(f"/api/galleries/{gallery['id']}/comments",json={'content':'reply','parentId':root,'turnstileToken':'test'})
-        self.assertEqual(other.get('/api/admin/comment-reports').status_code,403)
-        self.assertEqual(other.get('/api/comment-notifications?kind=reply').json()['total'],0)
-        notice=self.client.get('/api/comment-notifications?kind=reply').json()
-        self.assertEqual(notice['total'],before_total+1)
-        other.post('/api/comment-notifications/read',json={'kind':'reply','throughId':notice['latestId']})
-        self.assertEqual(self.client.get('/api/message-center/unread-count').json()['replies'],before_unread+1)
-        self.client.post('/api/comment-notifications/read',json={'kind':'reply','throughId':notice['latestId']})
-        self.assertEqual(self.client.get('/api/message-center/unread-count').json()['replies'],0)
 
     def test_file_tree_upload_and_folder_upload(self) -> None:
         headers = self.admin_headers()

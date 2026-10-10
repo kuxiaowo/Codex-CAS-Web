@@ -1,6 +1,0 @@
-{% extends "base.html" %}
-{% block title %}消息中心 · {{ site.siteName }}{% endblock %}
-{% block content %}
-<section class="mod-messages"><p class="eyebrow">MESSAGE CENTER</p><h1>消息中心</h1><h2>回复</h2><div data-comment-notifications="reply"></div><button class="button button-ghost" data-comment-more="reply" hidden>加载更多</button><h2>点赞</h2><div data-comment-notifications="like"></div><button class="button button-ghost" data-comment-more="like" hidden>加载更多</button><h2>系统消息</h2><div data-system-notifications></div><button class="button button-ghost" data-system-more hidden>加载更多</button></section>
-{% endblock %}
-{% block scripts %}<script src="/static/js/system-messages.js?v=comments1" defer></script>{% endblock %}

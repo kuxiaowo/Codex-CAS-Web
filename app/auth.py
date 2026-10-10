@@ -361,6 +361,18 @@ def current_user(request: Request) -> dict:
             connection.execute("DELETE FROM local_sessions WHERE id = ?", (user["session_id"],))
     if not user or user["expires_at"] <= utc_now() or not user["is_active"]:
         raise HTTPException(status_code=401, detail="登录状态无效或已过期")
+    from nethub_status import AccountStatusUnavailable, read_account_status
+    status = getattr(request.state, "central_account_status", None)
+    if status is None:
+        try:
+            status = read_account_status(settings.oidc_issuer, settings.oidc_client_id,
+                                         settings.oidc_client_secret, user["auth_sub"])
+        except AccountStatusUnavailable:
+            raise HTTPException(503, "账号中心暂时不可用，请稍后重试") from None
+        request.state.central_account_status = status
+    if not status["active"]:
+        revoke_current_session(request)
+        raise HTTPException(403, "账号已被全站封禁或停用；申诉请查看账号中心 /policy")
     request.state.session_id = user.pop("session_id", None)
     user.pop("expires_at", None)
     request.state.analytics_user_sub = user.get("auth_sub")

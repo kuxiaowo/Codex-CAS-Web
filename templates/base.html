@@ -7,8 +7,7 @@
   <meta name="theme-color" content="#f7f8fc">
   <title>{% block title %}{{ site.siteName }}{% endblock %}</title>
   <link rel="icon" href="/static/favicon.png" type="image/png" sizes="64x64">
-  <link rel="stylesheet" href="/static/css/styles.css?v=wiki-comments-20260929">
-  <link rel="stylesheet" href="/static/css/moderation.css?v=wiki-comments-20260929">
+  <link rel="stylesheet" href="/static/css/styles.css?v=gallery-20261001">
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -51,10 +50,6 @@
           <small>{{ category.galleryCount }}</small>
         </a>
       {% endfor %}
-      <a class="side-link is-hidden" href="/messages" data-system-link>
-        <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 6l8 6 8-6"/></svg></span>
-        <span>消息中心</span><small data-system-badge hidden>0</small>
-      </a>
       <a class="side-link is-hidden" href="/admin" data-admin-link>
         <span class="nav-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9l8-5 8 5v10M9 19v-6h6v6"/></svg></span>
         <span>管理后台</span>
@@ -106,8 +101,7 @@
   </footer>
 
   <div class="toast-region" aria-live="polite" aria-atomic="true" data-toast-region></div>
-  <script src="/static/js/app.js?v=wiki-comments-20260929-2" defer></script>
-  <script src="/static/js/moderation-ui.js?v=moderation2" defer></script>
+  <script src="/static/js/app.js?v=gallery-20261001" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
