@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
+import uuid
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 import sqlite3
@@ -36,12 +40,15 @@ from app.config import PROJECT_ROOT, settings, validate_runtime_settings
 from app.database import D1GatewayAdapter, D1IntegrityError, connect, get_setting, initialize_database, transaction, utc_now
 from app.gallery_assets import IMAGE_EXTENSIONS, RESOURCE_DIR, normalize_folder_upload_path, normalize_resource_path, validate_entry_name
 from app.media_library import (
+    all_gallery_images,
     create_folder,
     create_thumbnail,
     delete_image,
     folder_url,
     gallery_images,
     gallery_summary,
+    gallery_key,
+    invalidate_summary,
     list_directory,
     protected_download_url,
     upload_prepared_batch,
@@ -49,11 +56,12 @@ from app.media_library import (
     validate_gallery_directory,
     validate_image_file,
 )
-from app.media_storage import MediaStorageError, close_media_storage
+from app.media_storage import MediaStorageError, close_media_storage, get_media_storage, sha256_file
 from app.schemas import (
     AnnouncementInput,
     CategoryInput,
     GalleryInput,
+    GalleryDraftInput,
     SettingsInput,
     UserUpdateInput,
 )
@@ -61,6 +69,21 @@ from app.schemas import (
 
 STATIC_DIR = PROJECT_ROOT / "static"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
+
+
+_gallery_locks: dict[int, threading.RLock] = {}
+_gallery_locks_guard = threading.Lock()
+
+
+def _gallery_lock(gallery_id: int):
+    with _gallery_locks_guard:
+        return _gallery_locks.setdefault(gallery_id, threading.RLock())
+
+
+def _image_order(row) -> list[str]:
+    return json.loads(dict(row).get("image_order") or "[]")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     validate_runtime_settings()
@@ -171,7 +194,7 @@ def _category_dict(row: sqlite3.Row) -> dict:
 def _gallery_dict(row: sqlite3.Row, *, include_images: bool = False) -> dict:
     data = dict(row)
     try:
-        summary = gallery_summary(data["resource_dir"])
+        summary = gallery_summary(data["resource_dir"], _image_order(row))
     except (HTTPException, MediaStorageError, ValueError):
         summary = {"imageCount": 0, "cover": None}
     cover = summary["cover"]
@@ -182,6 +205,7 @@ def _gallery_dict(row: sqlite3.Row, *, include_images: bool = False) -> dict:
         "categorySlug": data.get("category_slug"),
         "title": data["title"],
         "resourceDir": data["resource_dir"],
+        "imageOrder": _image_order(row),
         "status": data["status"],
         "isFeatured": bool(data["is_featured"]),
         "views": data["views"],
@@ -192,7 +216,7 @@ def _gallery_dict(row: sqlite3.Row, *, include_images: bool = False) -> dict:
         "coverThumbSrc": cover["thumbSrc"] if cover else None,
     }
     if include_images:
-        page = gallery_images(data["resource_dir"], limit=30)
+        page = gallery_images(data["resource_dir"], limit=30, image_order=_image_order(row))
         result["images"] = page.images
         result["imagesNextCursor"] = page.next_cursor
         result["imagesHasMore"] = page.has_more
@@ -206,6 +230,7 @@ def _gallery_export_dict(row: sqlite3.Row) -> dict:
         "categoryId": data["category_id"],
         "title": data["title"],
         "resourceDir": data["resource_dir"],
+        "imageOrder": _image_order(row),
         "status": data["status"],
         "isFeatured": bool(data["is_featured"]),
         "views": data["views"],
@@ -411,7 +436,7 @@ def gallery_image_page(
     try:
         row = connection.execute(
             """
-            SELECT g.resource_dir
+            SELECT g.resource_dir, g.image_order
             FROM galleries g JOIN categories c ON c.id = g.category_id
             WHERE g.id = ? AND g.status = 'published' AND c.is_active = 1
             """,
@@ -422,7 +447,7 @@ def gallery_image_page(
     if not row:
         raise HTTPException(status_code=404, detail="图集不存在")
     try:
-        page = gallery_images(row["resource_dir"], cursor=cursor, limit=limit)
+        page = gallery_images(row["resource_dir"], cursor=cursor, limit=limit, image_order=_image_order(row))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="图片分页游标不合法") from exc
     return {
@@ -791,9 +816,27 @@ def _write_gallery(connection: sqlite3.Connection | D1GatewayAdapter, payload: G
         payload.resource_dir,
         require_images=payload.status == "published",
     )
+    previous = None
+    if gallery_id is not None:
+        previous = connection.execute("SELECT * FROM galleries WHERE id=?", (gallery_id,)).fetchone()
+        if previous is None:
+            raise HTTPException(status_code=404, detail="图集不存在")
+    order = payload.image_order
+    if order is not None:
+        for name in order:
+            if validate_entry_name(name, "图片名") != name:
+                raise HTTPException(status_code=422, detail="图片名称不合法")
+        invalidate_summary(resource_dir)
+        current_names = {item["name"] for item in all_gallery_images(resource_dir)}
+        if len(order) != len(set(order)) or set(order) != current_names:
+            raise HTTPException(status_code=409, detail="图片列表已变化或页序不完整，请重新打开编辑窗口")
+    elif previous is not None and previous["resource_dir"] == resource_dir:
+        order = _image_order(previous)
+    else:
+        order = []
     now = utc_now()
     values = (
-        payload.category_id, title, resource_dir,
+        payload.category_id, title, resource_dir, json.dumps(order, ensure_ascii=False),
         payload.status, int(payload.is_featured), now,
     )
     try:
@@ -801,8 +844,8 @@ def _write_gallery(connection: sqlite3.Connection | D1GatewayAdapter, payload: G
             cursor = connection.execute(
                 """
                 INSERT INTO galleries
-                  (category_id, title, resource_dir, status, is_featured, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
+                  (category_id, title, resource_dir, image_order, status, is_featured, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
                 """,
                 values + (now,),
             )
@@ -810,7 +853,7 @@ def _write_gallery(connection: sqlite3.Connection | D1GatewayAdapter, payload: G
             return int(row["id"] if row else cursor.lastrowid)
         cursor = connection.execute(
             """
-            UPDATE galleries SET category_id = ?, title = ?, resource_dir = ?,
+            UPDATE galleries SET category_id = ?, title = ?, resource_dir = ?, image_order = ?,
               status = ?, is_featured = ?, updated_at = ?
             WHERE id = ? RETURNING id
             """,
@@ -830,20 +873,98 @@ def admin_create_gallery(payload: GalleryInput, _: Annotated[dict, Depends(admin
     return {"data": {"id": gallery_id}}
 
 
+@app.post("/api/admin/galleries/drafts", status_code=201)
+def admin_create_upload_draft(payload: GalleryDraftInput, _: dict = Depends(admin_user)):
+    """Keep interrupted uploads discoverable as drafts without publishing partial notes."""
+    if not payload.title.strip():
+        raise HTTPException(status_code=422, detail="图集标题不能为空")
+    with transaction() as connection:
+        if not connection.execute("SELECT id FROM categories WHERE id=?", (payload.category_id,)).fetchone():
+            raise HTTPException(status_code=422, detail="栏目不存在")
+        directory = create_folder("", f"notes-{uuid.uuid4().hex}")["path"]
+        model = GalleryInput(**payload.model_dump(), resource_dir=directory)
+        gallery_id = _write_gallery(connection, model)
+    return {"data": {"id": gallery_id, "resourceDir": directory}}
+
+
+def _admin_gallery(gallery_id: int):
+    connection = connect()
+    try:
+        row = connection.execute("SELECT * FROM galleries WHERE id=?", (gallery_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="图集不存在")
+        return row
+    finally:
+        connection.close()
+
+
+@app.get("/api/admin/galleries/{gallery_id}/images")
+def admin_gallery_images(gallery_id: int, _: dict = Depends(admin_user)):
+    row = _admin_gallery(gallery_id)
+    return {"data": all_gallery_images(row["resource_dir"], _image_order(row))}
+
+
+@app.get("/api/admin/files/images")
+def admin_directory_images(path: str = Query(max_length=500), _: dict = Depends(admin_user)):
+    directory = validate_gallery_directory(path)
+    return {"data": all_gallery_images(directory)}
+
+
+def _upload_gallery_image(gallery_id: int, name: str, source: Path, thumbnail: Path):
+    with _gallery_lock(gallery_id):
+        row = _admin_gallery(gallery_id)
+        directory = row["resource_dir"]
+        relative = f"{directory}/{name}"
+        storage = get_media_storage()
+        names = [item["name"] for item in all_gallery_images(directory, _image_order(row))]
+        if any(other != name and other.casefold() == name.casefold() for other in names):
+            raise HTTPException(status_code=409, detail=f"存在大小写不同的同名图片：{name}")
+        existing = storage.head(gallery_key(relative))
+        if existing is not None:
+            if existing.sha256 == sha256_file(source):
+                return {"name": name, "reused": True}
+            raise HTTPException(status_code=409, detail=f"同名图片已存在且内容不同：{name}")
+        item = upload_prepared_image(relative, source, thumbnail)
+        try:
+            with transaction() as connection:
+                connection.execute("UPDATE galleries SET image_order=?,updated_at=? WHERE id=?", (
+                    json.dumps(names + [name], ensure_ascii=False), utc_now(), gallery_id,
+                ))
+        except Exception:
+            delete_image(relative)
+            raise
+        return item
+
+
+@app.post("/api/admin/galleries/{gallery_id}/images", status_code=201)
+async def admin_gallery_upload(gallery_id: int, file: UploadFile = File(...), _: dict = Depends(admin_user)):
+    _admin_gallery(gallery_id)
+    name = unicodedata.normalize("NFC", validate_entry_name(file.filename, "文件名"))
+    if Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=422, detail="只允许上传 JPG、PNG、WebP 或 GIF 图片")
+    with TemporaryDirectory(prefix="cas-page-upload-") as temporary_dir:
+        source, thumbnail = Path(temporary_dir) / "source", Path(temporary_dir) / "preview.webp"
+        await _save_upload(file, source, display_name=name)
+        await asyncio.to_thread(validate_image_file, source, name)
+        await asyncio.to_thread(create_thumbnail, source, thumbnail)
+        item = await asyncio.to_thread(_upload_gallery_image, gallery_id, name, source, thumbnail)
+    return {"data": item}
+
+
 @app.patch("/api/admin/galleries/{gallery_id}")
 def admin_update_gallery(
     gallery_id: int,
     payload: GalleryInput,
     _: Annotated[dict, Depends(admin_user)],
 ):
-    with transaction() as connection:
+    with _gallery_lock(gallery_id), transaction() as connection:
         _write_gallery(connection, payload, gallery_id)
     return {"data": {"id": gallery_id}}
 
 
 @app.delete("/api/admin/galleries/{gallery_id}", status_code=204)
 def admin_delete_gallery(gallery_id: int, _: Annotated[dict, Depends(admin_user)]):
-    with transaction() as connection:
+    with _gallery_lock(gallery_id), transaction() as connection:
         cursor = connection.execute("DELETE FROM galleries WHERE id = ?", (gallery_id,))
         if not cursor.rowcount:
             raise HTTPException(status_code=404, detail="图集不存在")
@@ -1260,6 +1381,7 @@ def admin_import(
                 category_id=category_id, title=item.get("title", ""),
                 resource_dir=item.get("resourceDir", ""),
                 status=item.get("status", "draft"), is_featured=item.get("isFeatured", False),
+                image_order=item.get("imageOrder") or None,
             )
             _write_gallery(connection, model)
             imported["galleries"] += 1

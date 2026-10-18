@@ -5,7 +5,7 @@
 ## 技术栈与目录
 
 - FastAPI + Jinja2：页面和 JSON API
-- SQLite：账号、栏目、图集目录、公告和留言
+- SQLite：账号、栏目、图集目录、图片页序和公告
 - Pillow：仅在上传时校验图片并生成 WebP 缩略图
 - Cloudflare R2：通过私有 HMAC Worker 保存图集原图、缩略图和目录摘要
 - 原生 HTML / CSS / JavaScript：无需 Node 构建
@@ -51,7 +51,10 @@ python -m app.cli register-client \
 
 ## 图集与资源文件
 
-- 图集只保存简短标题、栏目、资源目录、发布状态和精选状态。
+- 图集保存简短标题、栏目、资源目录、图片页序、发布状态和精选状态。
+- 新建图集可直接选择多张图片或图片文件夹，预览后拖拽或通过前移、后移调整页序。文件夹内图片汇总到同一份笔记，重名文件须先改名。也可继续选择已有资源目录。
+- 点击保存后先建立草稿，再逐张上传并显示进度，全部成功后保存页序与所选发布状态。失败时保留草稿和已上传图片，在当前窗口再次保存会重试未完成项；关闭窗口后可从草稿继续编辑并选择未完成的图片。
+- 编辑已有图集可追加图片，默认放在末尾；原有文件内容保留，单独生成预览图。页序存储于 SQLite 的 `galleries.image_order` JSON 数组，封面、阅读分页与灯箱采用同一页序。旧图集未保存自定义页序时继续按文件名自然排序。
 - 图集图片由后台上传至 R2；每个虚拟资源文件夹最多绑定一个图集。页面首批读取 30 张，后续通过游标懒加载。
 - 支持 JPG/JPEG、PNG、WebP、GIF。图库只列出所选虚拟目录当前层，并按文件名自然排序。
 - 首页封面和详情页只加载压缩后的 WebP 缩略图；用户点击图片打开灯箱时才加载原图。
@@ -75,9 +78,9 @@ MEDIA_GATEWAY_URL=https://codex-media.nethub.wiki
 
 ## 数据迁移与导入导出
 
-数据库结构版本为 v4。旧 v1 数据库首次启动时会删除旧笔记及其留言，保留栏目、公告、站点设置和访问限制，再建立图集表与新的留言关联。接入统一账号时会清除旧密码凭据并停用未绑定中央身份的开发账号；这些历史行仅用于保留业务外键，不会出现在本站成员列表中。
+数据库结构版本为 v8。v7 数据库启动时新增 `galleries.image_order` 列，已有图集默认保留自然排序；生产升级前须先备份数据库。旧 v1 数据库首次启动时会删除旧笔记及其留言，保留栏目、公告、站点设置和访问限制，再建立图集表。接入统一账号时会清除旧密码凭据并停用未绑定中央身份的开发账号；这些历史行仅用于保留业务外键，不会出现在本站成员列表中。
 
-JSON 导入导出格式为 v2，只包含资源相对路径，不包含图片文件。旧 `resources/` 可先用 `python scripts/migrate_media_to_r2.py` 做本地 dry-run；只有显式添加 `--execute` 才会调用网关。迁移默认不覆盖、不删除对象，并使用断点清单、SHA-256、multipart 与最终流式回读校验。v1 笔记数据包不会被兼容导入。
+JSON 导入导出格式为 v2，包含资源相对路径和可选的 imageOrder 页序，不包含图片文件。旧 `resources/` 可先用 `python scripts/migrate_media_to_r2.py` 做本地 dry-run；只有显式添加 `--execute` 才会调用网关。迁移默认不覆盖、不删除对象，并使用断点清单、SHA-256、multipart 与最终流式回读校验。v1 笔记数据包不会被兼容导入。
 
 媒体 Worker 的部署、Secret 和冻结协议见 `cloudflare/nethub-codex-media-gateway/README.md`。应用管理接口负责登录、管理员权限、同源 CSRF、扩展名、图片内容与大小校验；浏览器不会接触内部 HMAC Secret。
 
@@ -94,3 +97,5 @@ python -m pytest -q
 ```
 
 测试使用临时数据库和临时资源目录，不启动默认端口。
+
+可选的浏览器集成检查：安装 requirements-browser.txt 并运行 python -m playwright install chromium，再执行 python -m tests.browser_gallery_smoke。该检查使用临时数据和 3317 端口；可通过 CAS_BROWSER_CHANNEL=msedge 使用已安装的 Edge。

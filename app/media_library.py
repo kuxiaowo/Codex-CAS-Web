@@ -85,6 +85,7 @@ def gallery_images(
     *,
     cursor: str | None = None,
     limit: int = 30,
+    image_order: list[str] | None = None,
 ) -> GalleryPage:
     resource_dir = normalize_resource_path(resource_dir, allow_root=False)
     if not 1 <= limit <= 100:
@@ -98,6 +99,8 @@ def gallery_images(
             raise ValueError("图片分页游标不合法")
         objects = _cached_gallery_objects(resource_dir)
     elif cursor:
+        if image_order:
+            raise ValueError("页序已更新，请重新打开笔记")
         # Accept cursors issued by older releases while they are still in use.
         storage = get_media_storage()
         prefix = f"galleries/{resource_dir}/"
@@ -116,11 +119,25 @@ def gallery_images(
         start = 0
         objects = _cached_gallery_objects(resource_dir)
 
+    objects = order_objects(objects, image_order)
     selected = objects[start : start + limit]
     images = [_image_dict(item, resource_dir) for item in selected]
     end = start + len(selected)
     has_more = end < len(objects)
     return GalleryPage(images, f"local:{end}" if has_more else None, has_more)
+
+
+def order_objects(objects: list[MediaObject], names: list[str] | None) -> list[MediaObject]:
+    """Saved pages first; files added outside the editor follow in natural order."""
+    if not names:
+        return objects
+    positions = {name: index for index, name in enumerate(names)}
+    return sorted(objects, key=lambda item: positions.get(PurePosixPath(item.key).name, len(positions)))
+
+
+def all_gallery_images(resource_dir: str, image_order: list[str] | None = None) -> list[dict]:
+    relative = normalize_resource_path(resource_dir, allow_root=False)
+    return [_image_dict(item, relative) for item in order_objects(_cached_gallery_objects(relative), image_order)]
 
 
 def _cached_gallery_objects(resource_dir: str) -> list[MediaObject]:
@@ -161,8 +178,11 @@ def invalidate_summary(resource_dir: str) -> None:
         _objects_cache.pop(cache_key, None)
 
 
-def gallery_summary(resource_dir: str) -> dict:
+def gallery_summary(resource_dir: str, image_order: list[str] | None = None) -> dict:
     resource_dir = normalize_resource_path(resource_dir, allow_root=False)
+    if image_order:
+        images = all_gallery_images(resource_dir, image_order)
+        return {"imageCount": len(images), "cover": images[0] if images else None}
     cache_key = resource_dir.casefold()
     now = time.monotonic()
     with _summary_lock:

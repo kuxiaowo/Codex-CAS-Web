@@ -16,6 +16,8 @@
     pickerTarget: null,
   };
   let dialogSave = null;
+  let dialogCleanup = null;
+  let dialogBusy = false;
 
   function text(tag, value, className = '') {
     const element = document.createElement(tag);
@@ -90,6 +92,8 @@
     root.querySelector('[data-dialog-title]').textContent = titleValue;
     root.querySelector('[data-dialog-eyebrow]').textContent = eyebrow;
     const dialogBody = root.querySelector('[data-dialog-body]');
+    dialogCleanup?.();
+    dialogCleanup = null;
     dialogBody.replaceChildren();
     body(dialogBody);
     dialogSave = onSave;
@@ -108,7 +112,7 @@
     wrap.className = 'directory-field';
     const control = input('resourceDir', value, { required: true, maxLength: 500 });
     control.readOnly = true;
-    control.placeholder = '从 resources 中选择文件夹';
+    control.placeholder = '选择已上传的图片文件夹';
     wrap.append(control, button('浏览', 'button-ghost', () => openDirectoryPicker(control)));
     return field('资源文件夹', wrap);
   }
@@ -232,7 +236,7 @@
     const { data } = await api('/api/admin/galleries');
     state.galleries = data;
     const container = root.querySelector('[data-galleries-list]');
-    if (!data.length) return empty(container, '还没有图集。先在资源文件中准备图片目录。');
+    if (!data.length) return empty(container, '还没有图集。点击新建图集即可上传图片。');
     container.replaceChildren(...data.map((gallery) => row(
       gallery.title,
       [gallery.status, gallery.categoryName, gallery.resourceDir, `${gallery.imageCount} 张图片`, `${gallery.views} 次查看`, formatDate(gallery.updatedAt)],
@@ -240,7 +244,7 @@
         button('预览', 'button-ghost', () => window.open(`/galleries/${gallery.id}`, '_blank', 'noopener')),
         button('编辑', 'button-ghost', () => editGallery(gallery)),
         button('删除', 'button-danger', () => removeWithConfirmation(
-          `确定删除图集“${gallery.title}”及其留言吗？资源文件不会删除。`,
+          `确定删除图集“${gallery.title}”吗？资源文件会保留。`,
           `/api/admin/galleries/${gallery.id}`,
           async () => { await Promise.all([loadGalleries(), loadDashboard()]); },
         )),
@@ -254,6 +258,7 @@
       activateView('categories');
       return;
     }
+    let pages;
     openDialog({
       title: gallery ? '编辑图集' : '新建图集',
       eyebrow: 'COLLECTION',
@@ -261,24 +266,28 @@
         container.append(
           field('简短标题', input('title', gallery?.title, { required: true, maxLength: 60 })),
           field('栏目', select('categoryId', state.categories.map((item) => ({ value: item.id, label: item.name })), gallery?.categoryId || state.categories[0].id)),
-          directoryField(gallery?.resourceDir),
           field('状态', select('status', [
             { value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' },
             { value: 'archived', label: '已归档' },
           ], gallery?.status || 'draft')),
           checkbox('isFeatured', '作为精选图集优先展示', gallery?.isFeatured ?? false),
         );
+        pages = window.createGalleryPages({ container, gallery, api, field, select, directoryField, button, text });
+        dialogCleanup = () => pages.dispose();
       },
       async onSave(container) {
         const values = formData(container);
         const payload = {
           category_id: Number(values.categoryId), title: values.title,
-          resource_dir: values.resourceDir, status: values.status,
+          status: values.status,
           is_featured: container.querySelector('[name="isFeatured"]').checked,
         };
-        await api(gallery ? `/api/admin/galleries/${gallery.id}` : '/api/admin/galleries', {
-          method: gallery ? 'PATCH' : 'POST', body: JSON.stringify(payload),
-        });
+        try {
+          await pages.save(payload);
+        } catch (error) {
+          await Promise.allSettled([loadGalleries(), loadDashboard()]);
+          throw error;
+        }
         await Promise.all([loadGalleries(), loadCategories(), loadDashboard()]);
       },
     });
@@ -341,7 +350,7 @@
       [
         button('编辑', 'button-ghost', () => editUser(user)),
         button('删除', 'button-danger', () => removeWithConfirmation(
-          `确定删除用户“${user.displayName}”及其留言吗？`,
+          `确定删除用户“${user.displayName}”吗？`,
           `/api/admin/users/${user.id}`,
           async () => { await Promise.all([loadUsers(), loadDashboard()]); },
         )),
@@ -489,7 +498,10 @@
 
   function chooseDirectory(path = state.pickerPath) {
     if (!path) return;
-    if (state.pickerTarget) state.pickerTarget.value = path;
+    if (state.pickerTarget) {
+      state.pickerTarget.value = path;
+      state.pickerTarget.dispatchEvent(new Event('change'));
+    }
     state.pickerTarget = null;
     root.querySelector('[data-file-picker]').close();
   }
@@ -512,16 +524,30 @@
     root.querySelectorAll('[data-dialog-close]').forEach((control) => {
       control.addEventListener('click', (event) => {
         event.preventDefault();
+        if (dialogBusy) return;
         dialogSave = null;
         root.querySelector('[data-admin-dialog]')?.close();
       });
     });
 
+    root.querySelector('[data-admin-dialog]').addEventListener('cancel', (event) => {
+      if (dialogBusy) event.preventDefault();
+    });
+    root.querySelector('[data-admin-dialog]').addEventListener('close', () => {
+      dialogCleanup?.();
+      dialogCleanup = null;
+    });
+
     const dialogForm = root.querySelector('[data-dialog-form]');
     dialogForm?.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (dialogBusy) return;
       const save = root.querySelector('[data-dialog-save]');
       save.disabled = true;
+      dialogBusy = true;
+      dialogForm.setAttribute('aria-busy', 'true');
+      const body = root.querySelector('[data-dialog-body]');
+      body.inert = true;
       try {
         await dialogSave?.(root.querySelector('[data-dialog-body]'));
         root.querySelector('[data-admin-dialog]').close();
@@ -530,6 +556,9 @@
         toast(error.message, true);
       } finally {
         save.disabled = false;
+        dialogBusy = false;
+        dialogForm.removeAttribute('aria-busy');
+        body.inert = false;
       }
     });
 
