@@ -18,6 +18,9 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pytest -q
+      - run: python -m pip install -r requirements-browser.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python -W ignore -m tests.browser_gallery_smoke
       - run: bash -n scripts/init_linux.sh
       - name: Validate generated systemd unit
         run: |

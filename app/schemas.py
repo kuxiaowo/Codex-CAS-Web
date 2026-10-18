@@ -29,6 +29,13 @@ class GalleryInput(ApiModel):
     resource_dir: str = Field(min_length=1, max_length=500)
     status: str = Field(default="draft", pattern=r"^(draft|published|archived)$")
     is_featured: bool = False
+    image_order: list[str] | None = None
+
+
+class GalleryDraftInput(ApiModel):
+    category_id: int
+    title: str = Field(min_length=1, max_length=60)
+    is_featured: bool = False
 
 
 class AnnouncementInput(ApiModel):

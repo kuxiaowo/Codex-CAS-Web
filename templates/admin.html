@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}管理后台 · {{ site.siteName }}{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/admin.css?v=gallery-v2.1">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/admin.css?v=page-upload-20261018">{% endblock %}
 
 {% block content %}
 <div class="admin-shell" data-admin-app>
@@ -79,8 +79,8 @@
     <section class="admin-view" data-view-panel="transfer">
       <div class="admin-section-title"><div><small>PORTABILITY</small><h2>数据迁移</h2></div></div>
       <div class="transfer-grid">
-        <div class="admin-panel transfer-card"><span>01</span><h3>导出站点内容</h3><p>下载栏目、图集目录和公告的 JSON v2 数据包，不包含图片、账号与留言。</p><button class="button button-primary" data-export>导出 JSON</button></div>
-        <div class="admin-panel transfer-card"><span>02</span><h3>导入站点内容</h3><p>导入 JSON v2 数据包；资源图片需单独放入 resources 目录。</p><label class="button button-ghost file-button">选择 JSON<input type="file" accept="application/json,.json" data-import-file></label></div>
+        <div class="admin-panel transfer-card"><span>01</span><h3>导出站点内容</h3><p>下载栏目、图集目录、图片页序和公告的 JSON v2 数据包，不包含图片文件或账号。</p><button class="button button-primary" data-export>导出 JSON</button></div>
+        <div class="admin-panel transfer-card"><span>02</span><h3>导入站点内容</h3><p>导入 JSON v2 数据包；请先上传对应的资源图片。</p><label class="button button-ghost file-button">选择 JSON<input type="file" accept="application/json,.json" data-import-file></label></div>
       </div>
     </section>
 
@@ -112,4 +112,4 @@
   </dialog>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/admin.js?v=governance-20261001" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/js/gallery-editor.js?v=page-upload-20261018" defer></script><script src="/static/js/admin.js?v=page-upload-20261018" defer></script>{% endblock %}

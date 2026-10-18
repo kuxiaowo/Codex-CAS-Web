@@ -88,6 +88,120 @@ class AppTest(unittest.TestCase):
     def category_id(self) -> int:
         return self.client.get("/api/admin/categories", headers=self.admin_headers()).json()["data"][0]["id"]
 
+    def upload_draft(self, title="客户端上传验收") -> dict:
+        response = self.client.post('/api/admin/galleries/drafts', json={
+            'title': title, 'categoryId': self.category_id(),
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()['data']
+
+    def test_client_upload_retry_and_order_survive_pagination_and_export(self):
+        draft = self.upload_draft()
+        gallery_id = draft['id']
+        names = [f'{index}.jpg' for index in range(35)]
+        for name in names:
+            response = self.client.post(f'/api/admin/galleries/{gallery_id}/images', files={
+                'file': (name, image_bytes(), 'image/jpeg'),
+            })
+            self.assertEqual(response.status_code, 201, response.text)
+        # Retrying an uncertain request must not duplicate an uploaded page.
+        retry = self.client.post(f'/api/admin/galleries/{gallery_id}/images', files={
+            'file': ('0.jpg', image_bytes(), 'image/jpeg'),
+        })
+        self.assertEqual(retry.status_code, 201, retry.text)
+        self.assertTrue(retry.json()['data']['reused'])
+        self.assertEqual(self.client.get(f'/api/galleries/{gallery_id}/images').status_code, 404)
+        order = list(reversed(names))
+        payload = {'title': '已排序笔记', 'categoryId': self.category_id(), 'resourceDir': draft['resourceDir'],
+                   'status': 'published', 'imageOrder': order}
+        saved = self.client.patch(f'/api/admin/galleries/{gallery_id}', json=payload)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        first = self.client.get(f'/api/galleries/{gallery_id}/images').json()
+        second = self.client.get(f'/api/galleries/{gallery_id}/images', params={'cursor': first['nextCursor']}).json()
+        self.assertEqual([item['name'] for item in first['data'] + second['data']], order)
+        self.assertEqual(self.client.get(f'/api/admin/galleries/{gallery_id}/images').json()['data'][0]['name'], order[0])
+        home = self.client.get('/api/admin/galleries').json()['data']
+        record = next(item for item in home if item['id'] == gallery_id)
+        self.assertIn('/34.jpg.webp', record['coverThumbSrc'])
+        exported = self.client.get('/api/admin/export').json()
+        record = next(item for item in exported['galleries'] if item['id'] == gallery_id)
+        self.assertEqual(record['imageOrder'], order)
+        # Append through the editor: saved pages retain their order.
+        self.client.post(f'/api/admin/galleries/{gallery_id}/images', files={'file': ('new.jpg', image_bytes(), 'image/jpeg')})
+        current = self.client.get(f'/api/admin/galleries/{gallery_id}/images').json()['data']
+        self.assertEqual([item['name'] for item in current], order + ['new.jpg'])
+        with self.database.transaction() as db:
+            import json
+            self.assertEqual(json.loads(db.execute('SELECT image_order FROM galleries WHERE id=?', (gallery_id,)).fetchone()[0]), order + ['new.jpg'])
+
+    def test_upload_validation_and_order_conflicts_preserve_draft(self):
+        draft = self.upload_draft('失败保留草稿')
+        url = f"/api/admin/galleries/{draft['id']}/images"
+        for filename, data in [('bad.pdf', b'pdf'), ('bad.jpg', b'not an image')]:
+            response = self.client.post(url, files={'file': (filename, data)})
+            self.assertEqual(response.status_code, 422, response.text)
+        with patch.object(self.main, 'settings', SimpleNamespace(upload_max_bytes=20)):
+            self.assertEqual(self.client.post(url, files={'file': ('large.jpg', image_bytes())}).status_code, 413)
+        self.assertEqual(self.client.get(url).json()['data'], [])
+        self.assertEqual(self.client.post(url, files={'file': ('a.jpg', image_bytes())}).status_code, 201)
+        self.assertEqual(self.client.post(url, files={'file': ('a.jpg', image_bytes(color='red'))}).status_code, 409)
+        self.assertEqual(self.client.post(url, files={'file': ('A.jpg', image_bytes())}).status_code, 409)
+        payload = {'title': '失败保留草稿', 'categoryId': self.category_id(), 'resourceDir': draft['resourceDir'], 'imageOrder': ['other.jpg']}
+        self.assertEqual(self.client.patch(f"/api/admin/galleries/{draft['id']}", json=payload).status_code, 409)
+        payload['imageOrder'] = ['a.jpg', 'a.jpg']
+        self.assertEqual(self.client.patch(f"/api/admin/galleries/{draft['id']}", json=payload).status_code, 409)
+        payload['imageOrder'] = ['../a.jpg']
+        self.assertEqual(self.client.patch(f"/api/admin/galleries/{draft['id']}", json=payload).status_code, 422)
+
+    def test_client_upload_requires_admin_and_same_origin(self):
+        from fastapi.testclient import TestClient
+        anonymous = TestClient(self.main.app)
+        self.assertEqual(anonymous.post('/api/admin/galleries/drafts', json={'title': 'test', 'categoryId': 1}).status_code, 401)
+        self.assertEqual(anonymous.post('/api/admin/galleries/1/images', files={'file': ('a.jpg', image_bytes())}).status_code, 401)
+        self.assertEqual(self.client.post('/api/admin/galleries/drafts', headers={'Origin': 'https://evil.example'}, json={
+            'title': 'test', 'categoryId': self.category_id(),
+        }).status_code, 403)
+
+    def test_failed_thumbnail_upload_rolls_back_and_can_retry(self):
+        draft = self.upload_draft('R2 失败回滚')
+        from app.media_storage import get_media_storage
+        storage = get_media_storage()
+        put_file = storage.put_file
+        def fail_thumbnail(key, path, **kwargs):
+            if key.startswith('thumbnails/'):
+                raise self.main.MediaStorageError(502, 'unavailable', '模拟缩略图上传失败')
+            return put_file(key, path, **kwargs)
+        url = f"/api/admin/galleries/{draft['id']}/images"
+        with patch.object(storage, 'put_file', side_effect=fail_thumbnail):
+            response = self.client.post(url, files={'file': ('retry.jpg', image_bytes())})
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIsNone(storage.head(f"galleries/{draft['resourceDir']}/retry.jpg"))
+        self.assertEqual(self.client.get(url).json()['data'], [])
+        self.assertEqual(self.client.post(url, files={'file': ('retry.jpg', image_bytes())}).status_code, 201)
+
+    def test_saved_order_round_trips_through_import(self):
+        gallery = self.create_gallery('import-order')
+        legacy = self.create_gallery('import-legacy-order')
+        payload = {'categoryId': self.category_id(), 'title': '排序导出', 'resourceDir': 'import-order',
+                   'status': 'published', 'imageOrder': ['10.jpg', '2.jpg']}
+        self.assertEqual(self.client.patch(f"/api/admin/galleries/{gallery['id']}", json=payload).status_code, 200)
+        exported = self.client.get('/api/admin/export').json()
+        self.client.delete(f"/api/admin/galleries/{gallery['id']}")
+        self.client.delete(f"/api/admin/galleries/{legacy['id']}")
+        self.assertEqual(self.client.post('/api/admin/import', json=exported).status_code, 200)
+        restored = next(item for item in self.client.get('/api/admin/galleries').json()['data'] if item['resourceDir'] == 'import-order')
+        self.assertEqual(restored['imageOrder'], ['10.jpg', '2.jpg'])
+        records = self.client.get('/api/admin/galleries').json()['data']
+        legacy_restored = next(item for item in records if item['resourceDir'] == 'import-legacy-order')
+        legacy_images = self.client.get(f"/api/admin/galleries/{legacy_restored['id']}/images").json()['data']
+        self.assertEqual([item['name'] for item in legacy_images], ['2.jpg', '10.jpg'])
+
+    def test_frontend_contains_no_comment_copy(self):
+        for path in ('/', '/admin'):
+            html = self.client.get(path).text
+            for word in ('留言', '评论', '举报'):
+                self.assertNotIn(word, html)
+
     def create_gallery(self, name: str, *, status: str = "published") -> dict:
         created = self.client.post(
             "/api/admin/files/folders",
@@ -201,7 +315,8 @@ class AppTest(unittest.TestCase):
             "data-picker-current", "data-settings-form", "data-export",
         ):
             self.assertIn(control, response.text)
-        self.assertIn("/static/js/admin.js?v=governance-20261001", response.text)
+        self.assertIn("/static/js/admin.js?v=page-upload-20261018", response.text)
+        self.assertIn("/static/js/gallery-editor.js?v=page-upload-20261018", response.text)
         self.assertGreaterEqual(response.text.count('type="button" value="cancel"'), 2)
         self.assertGreaterEqual(response.text.count("data-dialog-close"), 2)
 

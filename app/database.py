@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS galleries (
   category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
   title TEXT NOT NULL,
   resource_dir TEXT NOT NULL UNIQUE,
+  image_order TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
   is_featured INTEGER NOT NULL DEFAULT 0 CHECK (is_featured IN (0, 1)),
   views INTEGER NOT NULL DEFAULT 0,
@@ -114,7 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_local_sessions_user ON local_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_local_sessions_subject ON local_sessions(auth_sub, oidc_sid);
 CREATE INDEX IF NOT EXISTS idx_oidc_login_states_expires ON oidc_login_states(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_logout_events_expires ON oidc_logout_events(expires_at);
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;
 """
 
 MIGRATE_V1_TO_V2 = """
@@ -355,7 +356,7 @@ def initialize_database() -> None:
         return
     with transaction() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in range(8):
+        if version not in range(9):
             raise RuntimeError(f"不支持的数据库版本：{version}")
         if version and version < 7 and connection.execute("SELECT 1 FROM sqlite_master WHERE name='_sync_control'").fetchone():
             raise RuntimeError("已启用镜像的数据库须离线运行评论移除迁移")
@@ -371,6 +372,10 @@ def initialize_database() -> None:
             connection.executescript(MIGRATE_REMOVE_COMMENTS)
             if any(row[1] == "turnstile_verified_at" for row in connection.execute("PRAGMA table_info(local_sessions)")):
                 connection.execute("ALTER TABLE local_sessions DROP COLUMN turnstile_verified_at")
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(galleries)')}
+        if 'image_order' not in columns:
+            connection.execute("ALTER TABLE galleries ADD COLUMN image_order TEXT NOT NULL DEFAULT '[]'")
+        connection.execute("PRAGMA user_version = 8")
         if connection.execute("PRAGMA foreign_key_check").fetchone():
             raise RuntimeError("数据库外键检查失败")
         now = utc_now()

@@ -120,6 +120,23 @@ class GalleryAssetTest(unittest.TestCase):
 
 
 class DatabaseMigrationTest(unittest.TestCase):
+    def test_v7_upgrade_preserves_gallery_and_is_repeatable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'v7.sqlite3'
+            with patch.object(database, 'database_path', return_value=path):
+                database.initialize_database()
+                with database.transaction() as db:
+                    category = db.execute('SELECT id FROM categories LIMIT 1').fetchone()[0]
+                    db.execute("INSERT INTO galleries(category_id,title,resource_dir,status,views,created_at,updated_at) VALUES(?, '旧笔记', 'old/path', 'published', 42, 'then', 'then')", (category,))
+                    db.execute('ALTER TABLE galleries DROP COLUMN image_order')
+                    db.execute('PRAGMA user_version=7')
+                database.initialize_database()
+                database.initialize_database()
+                with database.transaction() as db:
+                    row = db.execute('SELECT title,resource_dir,views,image_order FROM galleries').fetchone()
+                    self.assertEqual(tuple(row), ('旧笔记', 'old/path', 42, '[]'))
+                    self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 8)
+
 
 
 
@@ -217,7 +234,7 @@ class DatabaseMigrationTest(unittest.TestCase):
                 database.initialize_database()
                 migrated = database.connect()
                 try:
-                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 7)
+                    self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 8)
                     self.assertEqual(migrated.execute("SELECT username FROM users").fetchone()[0], "admin")
                     self.assertEqual(migrated.execute("SELECT password_hash FROM users").fetchone()[0], "")
                     self.assertEqual(migrated.execute("SELECT is_active FROM users").fetchone()[0], 0)
